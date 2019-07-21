@@ -100,7 +100,6 @@ int main(){
         printf("%d ",H_weights[i]);
     }
     
-    priority_queue<int,vector<int>,Compare > pq;
 
 
     return 0;

@@ -32,7 +32,7 @@ __global__ void A_star(int* off,int* edge,int* W,int* Hx,int* P,int* PQ,int* PQS
                     break;
             }
             else{
-                if( Cx[PQ[front+pqIndex]] > Cx[PQ[front+2*pqIndex+1]] && Cx[PQ[front+2*pqIndex+1]] <= Cx[PQ[front+2*pqIndex+1]] ){
+                if( Cx[PQ[front+pqIndex]] > Cx[PQ[front+2*pqIndex+1]] && Cx[PQ[front+2*pqIndex+1]] <= Cx[PQ[front+2*pqIndex+2]] ){
                     int swap = PQ[front + 2*pqIndex+1];
                     PQ[front + 2*pqIndex+1] = PQ[front +pqIndex];
                     PQ[front + pqIndex] = swap;
@@ -297,7 +297,7 @@ int main(){
     while(*H_flagEnd==0 && flagQempty==1){
         
         //launch the A* kernel
-        A_star<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weights,D_hx,D_parent,D_Kqueue,D_Kq_size,D_lock,D_nextFlag,D_flagEnd,N,edge_size,K,endNode);
+        A_star<<<numThreads,numBlocks>>>(D_offset,D_edges,D_weights,D_hx,D_parent,D_Kqueue,D_Kq_size,D_lock,D_nextFlag,D_flagEnd,N,edge_size,K,endNode);
 
         //launch the kernel to setNV from flags
         cudaDeviceSynchronize();
