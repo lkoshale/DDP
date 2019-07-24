@@ -4,7 +4,7 @@
 #include <string.h>
 
 #define  MAX_NODE  1000000
-#define  DEBUG 0
+#define  DEBUG 1
 
 __device__ volatile int Cx[MAX_NODE];
 __device__ volatile int PQ[MAX_NODE];
@@ -78,12 +78,10 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
        
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
-    
-
     if(id< *expandNodes_size ){
 
         int node = expandNodes[id];
-        // printf("%d %d\n",id,node);
+        printf("%d %d\n",id,node);
         //reach dest
         if(node == dest){
             *flagEnd = 1;
@@ -107,13 +105,15 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
                 continue;
             }
 
+            printf("%d$ before while\n",id);
+
             //array L initilaized with 0
             //get the lock for child to update C(x)
             //loop till acquire the lock
             while(atomicCAS(&lock[child],0,1)!=0){
             }
 
-            // printf("%d$%d: %d ,%d\n",node,child,Cx[child],lock[child]);
+            printf("%d$%d: %d ,%d\n",node,child,Cx[child],lock[child]);
             //update cost value
             if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
                 Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
@@ -166,6 +166,9 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
             
             start++;
         }
+
+        if(DEBUG)
+            printf("%d outside while\n",id);
 
         if(flagDiff){
 
@@ -476,27 +479,36 @@ int main(){
     //DO A* initailly on whole graph
     while(*H_flagEnd==0 && flag_PQ_empty==1){
         
+        
         //extract min
-        extractMin<<<numThreads,numBlocks>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
+        extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
         
         cudaDeviceSynchronize();
+        if(DEBUG)
+            printf("extract min complete\n");
 
-        A_star_expand<<<numThreads,numBlocks>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
+
+        A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
             D_expandNodes,D_expandNodes_size, D_lock ,D_flagEnd,D_openList,
             N,E,K,endNode,D_nVFlag,D_PQ_size,
             false,D_diff_offset,D_diff_edges,D_diff_offset );
         
         cudaDeviceSynchronize();
-
+        if(DEBUG)
+            printf("expand complete\n");
         //gen from flag D_nV
         //for N in parallel
-        setNV<<<numThreads,N_numBlocks>>>(D_nVFlag,D_nV,D_nV_size,N);
+        setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
 
         cudaDeviceSynchronize();
+        if(DEBUG)
+            printf("set complete\n");
 
-        insertPQ<<<numThreads,numBlocks>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
+        insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
         
         cudaDeviceSynchronize();
+        if(DEBUG)
+            printf("insert complete\n");
 
         //cpy flagend and flagEmpty
         cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost);
@@ -508,6 +520,9 @@ int main(){
         //reset next insert array
         cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
         cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
+
+        if(DEBUG)
+            printf("to host copy complete\n");
         
         flag_PQ_empty = 0;
         for(int i=0;i<K;i++){
