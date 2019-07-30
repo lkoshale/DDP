@@ -117,7 +117,7 @@ int main(){
 
         if(i%2==1){
             //use array 1
-            BFS<<<numThreads,numBlocks>>>(D_offset,D_edges,D_current_node1,D_c_size1,N,edge_size,D_current_node2,D_c_size2,D_visited);
+            BFS<<<numBlocks,numThreads>>>(D_offset,D_edges,D_current_node1,D_c_size1,N,edge_size,D_current_node2,D_c_size2,D_visited);
 
             cudaMemcpy(H_c_size,D_c_size2, sizeof(int),cudaMemcpyDeviceToHost);
             // reset the index
@@ -126,7 +126,7 @@ int main(){
         }
         else{
             //use array 2
-            BFS<<<numThreads,numBlocks>>>(D_offset,D_edges,D_current_node2,D_c_size2,N,edge_size,D_current_node1,D_c_size1,D_visited);
+            BFS<<<numBlocks,numThreads>>>(D_offset,D_edges,D_current_node2,D_c_size2,N,edge_size,D_current_node1,D_c_size1,D_visited);
             
             cudaMemcpy(H_c_size,D_c_size1, sizeof(int),cudaMemcpyDeviceToHost);
             //reset index

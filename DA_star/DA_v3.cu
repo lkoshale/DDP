@@ -88,7 +88,7 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
 
 //for K in parallel
 __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,
-    int* expandNodes,int* expandNodes_size, int* lock ,int* flagEnd,int* openList,
+    int* expandNodes,int* expandNodes_size, int* lock ,int* flagfound,int* openList,
     int N,int E, int K,int dest,int* nVFlag,int* PQ_size,
     int flagDiff,int* diff_off,int* diff_edge,int* diff_weight ){
        
@@ -100,9 +100,9 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
         
         //reach dest
         if(node == dest){
-            *flagEnd = 1;
+            atomicOr(flagfound,1);
+           // *flagfound = 1;
             printf("found %d\n",id);
-            return;
         }
 
         // expand
@@ -254,6 +254,21 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openLi
 }
 
 
+//for K in parallel
+__global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+    
+    if(id < K && PQ_size[id] > 0 ){
+        int front = id* ( (N+K-1)/K );
+        int node = PQ[front];
+        //check if atleast one min, dont end the a*
+        printf("%d ",Cx[node]);
+        if(Cx[dest] > Cx[node] ){
+            atomicAnd(flagEnd,0);
+        }
+    }
+}
+
 __global__ void printCX(int dest){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id==0){
@@ -323,15 +338,17 @@ int main(){
     printf("completed input\n");
 
     //init Host var
-
     int* H_flagEnd = (int*)malloc(sizeof(int));
+    int* H_flagfound = (int*)malloc(sizeof(int));
     int* H_a0 = (int*)malloc(sizeof(int));
+
 
     //required coz if many tries to add same in diff threads high low lower
     int* H_nVFlag = (int*)malloc(sizeof(int)*N);
     memset(H_nVFlag,-1,sizeof(int)*N);    
 
     *H_flagEnd = 0;
+    *H_flagfound = 0;
     *H_a0 = 0;
 
     //insert startNode in PQ[0]
@@ -340,27 +357,40 @@ int main(){
     H_PQ_size[0]=1;
     H_openList[startNode]=0;
 
+
+    //graph struture
     int* D_offset;
     int* D_edges ;
     unsigned int* D_weight;
     int* D_hx;
     int* D_parent;
     
+    //Priority queue size
     int* D_PQ_size;
 
+    //flag if in openList(contains which PQ)
     int* D_openList;
+    //lock for nodes
     int* D_lock;
 
+    //Diff structure
     int* D_diff_edges;
     int* D_diff_offset;
     int* D_diff_weight;
 
+    //next nodes flag
     int* D_nVFlag;
+    //next nodes array to insert PQ
     int* D_nV;
     int* D_nV_size;
+    
+    //nodes to be expanded ( extracted from PQ )
     int* D_expandNodes;
     int* D_expandNodes_size;
+    
+    //flag to end while loop and found the destination
     int* D_flagEnd;
+    int* D_flagfound;
 
     gpuErrchk ( cudaMalloc(&D_offset,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_edges,sizeof(int)*E) );
@@ -369,8 +399,8 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_parent,sizeof(int)*N) );
    
     gpuErrchk ( cudaMalloc(&D_PQ_size,sizeof(int)*K) );
+    
     gpuErrchk ( cudaMalloc(&D_openList,sizeof(int)*N) );
-
     gpuErrchk ( cudaMalloc(&D_lock,sizeof(int)*N) );
 
 
@@ -384,11 +414,13 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_nV_size,sizeof(int)) );
     gpuErrchk ( cudaMalloc(&D_nVFlag,sizeof(int)*N) );
 
-    gpuErrchk ( cudaMalloc(&D_expandNodes,sizeof(int)*N) );
+    //next nodes to expand
+    gpuErrchk ( cudaMalloc(&D_expandNodes,sizeof(int)*K) );  //changed to K
     gpuErrchk ( cudaMalloc(&D_expandNodes_size,sizeof(int)) );
 
     //flag to end search
     gpuErrchk( cudaMalloc(&D_flagEnd,sizeof(int)) );
+    gpuErrchk( cudaMalloc(&D_flagfound,sizeof(int)) );
     
     
     gpuErrchk ( cudaMemcpy(D_offset,H_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
@@ -411,6 +443,7 @@ int main(){
     gpuErrchk ( cudaMemcpyToSymbol(PQ,H_PQ, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
 
     gpuErrchk ( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_flagfound,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
    
     gpuErrchk ( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
@@ -421,10 +454,10 @@ int main(){
     gpuErrchk ( cudaMemset(D_lock,0,sizeof(int)*N) );
 
 
-    int flag_PQ_empty = 0;
+    int flag_PQ_not_empty = 0;
     for(int i=0;i<K;i++){
         if(H_PQ_size[i]>0)
-            flag_PQ_empty=1;
+            flag_PQ_not_empty=1;
     }
 
 
@@ -433,7 +466,7 @@ int main(){
     int N_numBlocks = (N+numThreads-1)/numThreads;
 
     //DO A* initailly on whole graph
-    while(*H_flagEnd==0 && flag_PQ_empty==1){
+    while(*H_flagEnd==0 && flag_PQ_not_empty==1){
         
         //extract min
         extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
@@ -441,10 +474,10 @@ int main(){
         gpuErrchk(cudaPeekAtLastError() );
 
         cudaDeviceSynchronize();
-        
 
+        
         A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
-            D_expandNodes,D_expandNodes_size, D_lock ,D_flagEnd,D_openList,
+            D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
             N,E,K,endNode,D_nVFlag,D_PQ_size,
             false,D_diff_offset,D_diff_edges,D_diff_offset );
         
@@ -470,7 +503,7 @@ int main(){
         cudaDeviceSynchronize();
        
         //cpy flagend and flagEmpty
-        gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+        gpuErrchk( cudaMemcpy(H_flagfound,D_flagfound, sizeof(int),cudaMemcpyDeviceToHost) );
         gpuErrchk( cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost) );
         
         //reset nVFlag
@@ -480,10 +513,24 @@ int main(){
         gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
         gpuErrchk( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
         
-        flag_PQ_empty = 0;
+
+        flag_PQ_not_empty = 0;
         for(int i=0;i<K;i++){
             if(H_PQ_size[i]>0)
-                flag_PQ_empty=1;
+                flag_PQ_not_empty=1;
+        }
+
+        //check for mins
+        if( *H_flagfound==1 && flag_PQ_not_empty==1){
+            //end 
+            gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+
+            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
+            
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
+            gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+            printf("\ninside MIN\n");
         }
    
     }
@@ -492,7 +539,7 @@ int main(){
     gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
 
-    if(*H_flagEnd==1){
+    if(*H_flagfound==1){
         int p = endNode;
         while(H_parent[p]!=-1){
             printf("%d ",p);
