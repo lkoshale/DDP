@@ -1,5 +1,5 @@
 /*
- only works on DIRECTED GRAPH
+ For DIRECTED GRAPH
 */
 
 #include <cuda.h>
@@ -7,8 +7,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define  MAX_NODE  1000000
-#define  DEBUG 1
+#define  MAX_NODE  100000000
+#define  DEBUG 0
+
+
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+
 
 __device__ volatile int Cx[MAX_NODE];
 __device__ volatile int PQ[MAX_NODE];
@@ -76,7 +88,7 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
 
 //for K in parallel
 __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,
-    int* expandNodes,int* expandNodes_size, int* lock ,int* flagEnd,int* openList,
+    int* expandNodes,int* expandNodes_size, int* lock ,int* flagfound,int* openList,
     int N,int E, int K,int dest,int* nVFlag,int* PQ_size,
     int flagDiff,int* diff_off,int* diff_edge,int* diff_weight ){
        
@@ -85,12 +97,12 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
     if(id< *expandNodes_size ){
 
         int node = expandNodes[id];
-        //printf("%d %d\n",id,node);
+        
         //reach dest
         if(node == dest){
-            *flagEnd = 1;
-            //printf("found %d\n",id);
-            return;
+            atomicOr(flagfound,1);
+           // *flagfound = 1;
+            printf("found %d\n",id);
         }
 
         // expand
@@ -99,8 +111,11 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
         if(node!=N-1)
             end = off[node+1];
         
-            
-        while(start<end){ 
+        
+        if(DEBUG)
+            printf("%d$expand %d:\n",id,start);
+
+        while(start < end){ 
             int child = edge[start];
             
             //deleted edges
@@ -109,145 +124,82 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
                 continue;
             }
 
-            //printf("%d$ before while\n",id);
 
             //array L initilaized with 0
             //get the lock for child to update C(x)
             //loop till acquire the lock
-            while(atomicCAS(&lock[child],0,1)!=0){
-            }
+            bool leaveLoop = false;
 
-            //printf("%d$%d: %d ,%d\n",node,child,Cx[child],lock[child]);
-            //update cost value
-            if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
-                Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
-                __threadfence();
-                parent[child] = node;
+            while(leaveLoop==false){
 
-                if(DEBUG)
-                    printf("exp: %d %d\n",node,child);
-
-                if(openList[child]>=0){
-                    //update operating on one thread
-                    if(DEBUG)
-                        printf("upd: %d %d\n",node,child);
-                    
-                    int Kq = openList[child];
-                    int front = Kq*( (N+K-1)/K );
-                    int index = -1;
-                    for(int i=front;i<front+PQ_size[Kq];i++){
-                        if(PQ[i]==child){
-                            index = i;
-                        }
-                    }
-
-                    if(index > 0){
-                        int i = index;
-                        while(i > front){
-                            if( Cx[PQ[(i-1)/2]] > Cx[PQ[i]] ){
-                                int swap = PQ[i];
-                                PQ[i] = PQ[(i-1)/2];
-                                PQ[(i-1)/2] = swap;
-                                i = (i-1)/2;
+                if(atomicCAS(&lock[child],0,1)==0){
+                    //critical section
+                    if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
+                        Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
+                        __threadfence();
+                        parent[child] = node;
+        
+                        if(DEBUG)
+                            printf("exp: %d %d\n",node,child);
+        
+                        if(openList[child]>=0){
+                            //update operating on one thread
+                            if(DEBUG)
+                                printf("upd: %d %d\n",node,child);
+                            
+                            int Kq = openList[child];
+                            int front = Kq*( (N+K-1)/K );
+                            int index = -1;
+                            for(int i=front;i<front+PQ_size[Kq];i++){
+                                if(PQ[i]==child){
+                                    index = i;
+                                }
                             }
-                            else
-                                break;
-                        }
+
+        
+                            if(index > 0){
+                                int i = index;
+                                while(i > front){
+                                    if( Cx[PQ[(i-1)/2]] > Cx[PQ[i]] ){
+                                        int swap = PQ[i];
+                                        PQ[i] = PQ[(i-1)/2];
+                                        PQ[(i-1)/2] = swap;
+                                        i = (i-1)/2;
+                                    }
+                                    else
+                                        break;
+                                }
+                            }
+
+                            if(DEBUG)
+                                printf("out of while\n");
+        
+                        }else{
+                            nVFlag[child]=1;
+                            //add only once
+                        }  
                     }
 
-                    __threadfence();
+                    //end critical section
+                    leaveLoop = true;
 
-                }else{
-                    nVFlag[child]=1;
-                    //add only once
+                    atomicCAS(&lock[child],1,0);
+
+                    // if(DEBUG)
+                    //     printf("im not deadlocked\n");
                 }
 
-                
+                __syncthreads();
+                if(DEBUG)
+                    printf("%d$ stuck here\n",id);
                 
             }
-            //unlock       
-            atomicCAS(&lock[child],1,0);    
-            
+
             start++;
         }
 
         if(DEBUG)
             printf("%d outside while\n",id);
-
-        if(flagDiff){
-
-            //
-            printf("something\n");
-
-            start = diff_off[node];
-            end = E;
-            if(node!=N-1)
-                end = diff_off[node+1];
-
-            while(start<end){ 
-                int child = diff_edge[start];
-                
-                //deleted edges
-                if(child<0){
-                    start++;
-                    continue;
-                }
-    
-                //array L initilaized with 0
-                //get the lock for child to update C(x)
-                //loop till acquire the lock
-                while(atomicCAS(&lock[child],0,1)!=0){
-                }
-               
-                printf("%d$%d: %d ,%d\n",node,child,Cx[child],lock[child]);
-                
-                //update cost value
-                if( Cx[child] > (Cx[node] - Hx[node])+ diff_weight[start]+ Hx[child] ){
-                    Cx[child]  = (Cx[node] - Hx[node])+ diff_weight[start] + Hx[child];
-                    __threadfence();
-                    parent[child] = node;
-                    
-                    // printf("%d-%d: %d ,%d\n",node,child,Cx[child],lock[child]);
-                    if(openList[child]>=0){
-                         //update operating on one thread
-                        int Kq = openList[child];
-                        int front = Kq*( (N+K-1)/K );
-                        int index = -1;
-                        for(int i=front;i<front+PQ_size[Kq];i++){
-                            if(PQ[i]==child){
-                                index = i;
-                            }
-                        }
-
-                        if(index > 0){
-                            int i = index;
-                            while(i > front){
-                                if( Cx[PQ[(i-1)/2]] > Cx[PQ[i]] ){
-                                    int swap = PQ[i];
-                                    PQ[i] = PQ[(i-1)/2];
-                                    PQ[(i-1)/2] = swap;
-                                    i = (i-1)/2;
-                                }
-                                else
-                                    break;
-                            }
-                        }
-
-                        __threadfence();
-
-                    }else{
-                        nVFlag[child]=1;
-                    }
-                    
-                }
-                //unlock       
-                atomicCAS(&lock[child],1,0);    
-                
-                start++;
-            }
-            
-        }
-
     }
 
 }
@@ -274,7 +226,8 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openLi
         // printf("id: %d\n",id);
         int front = id*( (N+K-1)/K );
         int i = id;
-        // printf("s: %d %d\n",*nVsize,PQS[id]);
+        if(id==0)
+            printf("insert: %d\n",*nVsize);
         while(i<*nVsize){
             PQ[front+PQS[id]]= nextV[i];
             PQS[id]+=1;
@@ -301,6 +254,21 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openLi
     }
 }
 
+
+//for K in parallel
+__global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+    
+    if(id < K && PQ_size[id] > 0 ){
+        int front = id* ( (N+K-1)/K );
+        int node = PQ[front];
+        //check if atleast one min, dont end the a*
+        printf("%d ",Cx[node]);
+        if(Cx[dest] > Cx[node] ){
+            atomicAnd(flagEnd,0);
+        }
+    }
+}
 
 __global__ void printCX(int dest){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
@@ -371,15 +339,17 @@ int main(){
     printf("completed input\n");
 
     //init Host var
-
     int* H_flagEnd = (int*)malloc(sizeof(int));
+    int* H_flagfound = (int*)malloc(sizeof(int));
     int* H_a0 = (int*)malloc(sizeof(int));
+
 
     //required coz if many tries to add same in diff threads high low lower
     int* H_nVFlag = (int*)malloc(sizeof(int)*N);
     memset(H_nVFlag,-1,sizeof(int)*N);    
 
     *H_flagEnd = 0;
+    *H_flagfound = 0;
     *H_a0 = 0;
 
     //insert startNode in PQ[0]
@@ -388,90 +358,107 @@ int main(){
     H_PQ_size[0]=1;
     H_openList[startNode]=0;
 
+
+    //graph struture
     int* D_offset;
     int* D_edges ;
     unsigned int* D_weight;
     int* D_hx;
     int* D_parent;
+    
+    //Priority queue size
     int* D_PQ_size;
 
+    //flag if in openList(contains which PQ)
     int* D_openList;
+    //lock for nodes
     int* D_lock;
 
+    //Diff structure
     int* D_diff_edges;
     int* D_diff_offset;
     int* D_diff_weight;
 
+    //next nodes flag
     int* D_nVFlag;
+    //next nodes array to insert PQ
     int* D_nV;
     int* D_nV_size;
+    
+    //nodes to be expanded ( extracted from PQ )
     int* D_expandNodes;
     int* D_expandNodes_size;
+    
+    //flag to end while loop and found the destination
     int* D_flagEnd;
+    int* D_flagfound;
 
-    cudaMalloc(&D_offset,sizeof(int)*N);
-    cudaMalloc(&D_edges,sizeof(int)*E);
-    cudaMalloc(&D_weight,sizeof(unsigned int)*E);
-    cudaMalloc(&D_hx,sizeof(int)*N);
-    cudaMalloc(&D_parent,sizeof(int)*N);
-   // cudaMalloc(&D_PQ,sizeof(int)*N);
-    cudaMalloc(&D_PQ_size,sizeof(int)*K);
-    cudaMalloc(&D_openList,sizeof(int)*N);
-
-    cudaMalloc(&D_lock,sizeof(int)*N);
+    gpuErrchk ( cudaMalloc(&D_offset,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_edges,sizeof(int)*E) );
+    gpuErrchk ( cudaMalloc(&D_weight,sizeof(unsigned int)*E) );
+    gpuErrchk ( cudaMalloc(&D_hx,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_parent,sizeof(int)*N) );
+   
+    gpuErrchk ( cudaMalloc(&D_PQ_size,sizeof(int)*K) );
+    
+    gpuErrchk ( cudaMalloc(&D_openList,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_lock,sizeof(int)*N) );
 
 
     //diff csr
-    cudaMalloc(&D_diff_edges,sizeof(int)*E);
-    cudaMalloc(&D_diff_offset,sizeof(int)*N);
-    cudaMalloc(&D_diff_weight,sizeof(int)*E);
+    gpuErrchk ( cudaMalloc(&D_diff_edges,sizeof(int)*E) );
+    gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_diff_weight,sizeof(int)*E) );
 
     //for next set of vertices to add in PQ
-    cudaMalloc(&D_nV,sizeof(int)*N);
-    cudaMalloc(&D_nV_size,sizeof(int));
-    cudaMalloc(&D_nVFlag,sizeof(int)*N);
+    gpuErrchk ( cudaMalloc(&D_nV,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_nV_size,sizeof(int)) );
+    gpuErrchk ( cudaMalloc(&D_nVFlag,sizeof(int)*N) );
 
-    cudaMalloc(&D_expandNodes,sizeof(int)*N);
-    cudaMalloc(&D_expandNodes_size,sizeof(int));
+    //next nodes to expand
+    gpuErrchk ( cudaMalloc(&D_expandNodes,sizeof(int)*K) );  //changed to K
+    gpuErrchk ( cudaMalloc(&D_expandNodes_size,sizeof(int)) );
 
     //flag to end search
-    cudaMalloc(&D_flagEnd,sizeof(int));
+    gpuErrchk( cudaMalloc(&D_flagEnd,sizeof(int)) );
+    gpuErrchk( cudaMalloc(&D_flagfound,sizeof(int)) );
     
     
-    cudaMemcpy(D_offset,H_offset,sizeof(int)*N,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_edges,H_edges,sizeof(int)*E,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_weight,H_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_hx,H_hx,sizeof(int)*N,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_parent,H_parent,sizeof(int)*N,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_openList,H_openList,sizeof(int)*N,cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpy(D_offset,H_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_weight,H_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_hx,H_hx,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_parent,H_parent,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_openList,H_openList,sizeof(int)*N,cudaMemcpyHostToDevice) );
     
-    cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice) );
 
 
-    // cudaMemcpy(D_PQ,H_PQ,sizeof(int)*N,cudaMemcpyHostToDevice);
-    cudaMemcpy(D_PQ_size,H_PQ_size,sizeof(int)*K,cudaMemcpyHostToDevice);
+
+    gpuErrchk ( cudaMemcpy(D_PQ_size,H_PQ_size,sizeof(int)*K,cudaMemcpyHostToDevice) );
 
 
-    cudaMemcpyToSymbol(Cx,H_cx, sizeof(int)*N, 0, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(PQ,H_PQ, sizeof(int)*N, 0, cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpyToSymbol(Cx,H_cx, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpyToSymbol(PQ,H_PQ, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
 
-    cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_flagfound,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
    
-    cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
-    cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
-    cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
+    gpuErrchk ( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
 
     
-    cudaMemset(D_lock,0,sizeof(int)*N);
+    gpuErrchk ( cudaMemset(D_lock,0,sizeof(int)*N) );
 
 
-    int flag_PQ_empty = 0;
+    int flag_PQ_not_empty = 0;
     for(int i=0;i<K;i++){
         if(H_PQ_size[i]>0)
-            flag_PQ_empty=1;
+            flag_PQ_not_empty=1;
     }
 
 
@@ -480,58 +467,85 @@ int main(){
     int N_numBlocks = (N+numThreads-1)/numThreads;
 
     //DO A* initailly on whole graph
-    while(*H_flagEnd==0 && flag_PQ_empty==1){
+    while(*H_flagEnd==0 && flag_PQ_not_empty==1){
         
         //extract min
         extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
         
+        gpuErrchk(cudaPeekAtLastError() );
+
         cudaDeviceSynchronize();
 
+        
         A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
-            D_expandNodes,D_expandNodes_size, D_lock ,D_flagEnd,D_openList,
+            D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
             N,E,K,endNode,D_nVFlag,D_PQ_size,
             false,D_diff_offset,D_diff_edges,D_diff_offset );
         
+        gpuErrchk(cudaPeekAtLastError() );
+        
         cudaDeviceSynchronize();
-        //gen from flag D_nV
+
+        if(DEBUG)
+            printf("expand over\n");
+       
+        
+         //gen from flag D_nV
         //for N in parallel
         setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
-
+        
+        gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
+        
 
         insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
         
+        gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
-
+       
         //cpy flagend and flagEmpty
-        cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost);
-        cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost);
+        gpuErrchk( cudaMemcpy(H_flagfound,D_flagfound, sizeof(int),cudaMemcpyDeviceToHost) );
+        gpuErrchk( cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost) );
         
         //reset nVFlag
-        cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice);
+        gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
         //reset next insert array
-        cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice);
+        gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+        gpuErrchk( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
         
-        flag_PQ_empty = 0;
+
+        flag_PQ_not_empty = 0;
         for(int i=0;i<K;i++){
             if(H_PQ_size[i]>0)
-                flag_PQ_empty=1;
+                flag_PQ_not_empty=1;
+        }
+
+        //check for mins
+        if( *H_flagfound==1 && flag_PQ_not_empty==1){
+            //end 
+            gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+
+            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
+            
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
+            gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+            printf("\ninside MIN\n");
         }
    
     }
 
     printCX<<<1,1>>>(endNode);
-    cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost);
+    gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
 
-    if(*H_flagEnd==1){
+    if(*H_flagfound==1){
         int p = endNode;
         while(H_parent[p]!=-1){
             printf("%d ",p);
             p = H_parent[p];
-        }
+        } 
         printf("%d\n",startNode);
     }
     else{

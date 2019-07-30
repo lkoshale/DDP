@@ -142,42 +142,10 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
                         if(DEBUG)
                             printf("exp: %d %d\n",node,child);
         
-                        if(openList[child]>=0){
-                            //update operating on one thread
-                            if(DEBUG)
-                                printf("upd: %d %d\n",node,child);
-                            
-                            int Kq = openList[child];
-                            int front = Kq*( (N+K-1)/K );
-                            int index = -1;
-                            for(int i=front;i<front+PQ_size[Kq];i++){
-                                if(PQ[i]==child){
-                                    index = i;
-                                }
-                            }
-
-        
-                            if(index > 0){
-                                int i = index;
-                                while(i > front){
-                                    if( Cx[PQ[(i-1)/2]] > Cx[PQ[i]] ){
-                                        int swap = PQ[i];
-                                        PQ[i] = PQ[(i-1)/2];
-                                        PQ[(i-1)/2] = swap;
-                                        i = (i-1)/2;
-                                    }
-                                    else
-                                        break;
-                                }
-                            }
-
-                            if(DEBUG)
-                                printf("out of while\n");
-        
-                        }else{
+                        if(openList[child]==-1){
                             nVFlag[child]=1;
                             //add only once
-                        }  
+                        }
                     }
 
                     //end critical section
@@ -205,6 +173,56 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
 }
 
 
+//K in parallel -- O(N)
+__global__ void keepHeapPQ(int* PQ_size,int N,int K){
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+    if(id < K && PQ_size[id] > 0){
+        int front  = id*( (N+K-1)/K );
+        int size = PQ_size[id];
+        
+        for(int i=front;i<front+size;i++){
+            if(2*i+2 < front+size){
+                int cost = Cx[PQ[i]];
+                int costLeft = Cx[PQ[2*i+1]];
+                int costRight = Cx[PQ[2*i+2]]; 
+                if( cost > costLeft  ||  cost > costRight  ){
+                    int index ;
+                    if(costLeft <= costRight)
+                        index = 2*i+1;
+                    else
+                        index = 2*i+2;
+                    
+                    while(index > front){
+                        if( Cx[PQ[(index-1)/2]] > Cx[PQ[index]] ){
+                            int swap = PQ[index];
+                            PQ[index] = PQ[(index-1)/2];
+                            PQ[(index-1)/2] = swap;
+                            index = (index-1)/2;
+                        }
+                        else
+                            break;
+                    }
+                }
+            }
+            else if(2*i+1 < front+size){
+                if(Cx[PQ[i]] > Cx[PQ[2*i+1]]){
+                    int index = 2*i+1;
+                    while(index > front){
+                        if( Cx[PQ[(index-1)/2]] > Cx[PQ[index]] ){
+                            int swap = PQ[index];
+                            PQ[index] = PQ[(index-1)/2];
+                            PQ[(index-1)/2] = swap;
+                            index = (index-1)/2;
+                        }
+                        else
+                            break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 //N threads
 __global__ void setNV(int* nextFlag,int* nextV,int* nvSize,int N){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
@@ -226,8 +244,8 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openLi
         // printf("id: %d\n",id);
         int front = id*( (N+K-1)/K );
         int i = id;
-        if(id==0)
-            printf("insert: %d\n",*nVsize);
+        // if(id==0)
+        //     printf("insert: %d\n",*nVsize);
         while(i<*nVsize){
             PQ[front+PQS[id]]= nextV[i];
             PQS[id]+=1;
@@ -263,7 +281,7 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
         int front = id* ( (N+K-1)/K );
         int node = PQ[front];
         //check if atleast one min, dont end the a*
-        printf("%d ",Cx[node]);
+       // printf("%d ",Cx[node]);
         if(Cx[dest] > Cx[node] ){
             atomicAnd(flagEnd,0);
         }
@@ -489,8 +507,12 @@ int main(){
         if(DEBUG)
             printf("expand over\n");
        
+
+        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
+        gpuErrchk(cudaPeekAtLastError() );
+        cudaDeviceSynchronize();
         
-         //gen from flag D_nV
+        //gen from flag D_nV
         //for N in parallel
         setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
         
@@ -531,7 +553,7 @@ int main(){
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
             gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
-            printf("\ninside MIN\n");
+           // printf("\ninside MIN\n");
         }
    
     }
