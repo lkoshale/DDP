@@ -3,6 +3,7 @@
 #include <string>
 #include <cstring>
 #include <climits>
+#include <cstdio>
 
 using namespace std;
 
@@ -190,11 +191,12 @@ int main(){
         printf("cost %d\n",H_cx[endNode]);
 
         int c_node = endNode;
+        printf("%d ",c_node);
         while(H_parent[c_node]!=-1){
             printf("%d ",H_parent[c_node]);
             c_node = H_parent[c_node];
         }
-        printf("%d\n",c_node);
+        printf("\n");
     }
     else{
         printf("unreachable !!\n");

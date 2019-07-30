@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stack>
+#include <set>
 
 
 #define CHECK_CYCLE  0
@@ -55,11 +56,11 @@ int main(){
             it = Graph.find(b);
             if(it!=Graph.end()){
                 Node* v = it->second;
-                n->addEdge(v,c);
+                v->addEdge(n,c);
             }
             else{
                 Node* v = new Node(b);
-                n->addEdge(v,c);
+                v->addEdge(n,c);
                 Graph.insert(pair<unsigned int,Node*>(b,v));
             }
 
@@ -72,11 +73,11 @@ int main(){
             it = Graph.find(b);
             if(it!=Graph.end()){
                 Node* v = it->second;
-                n->addEdge(v,c);
+                v->addEdge(n,c);
             }
             else{
                 Node* v = new Node(b);
-                n->addEdge(v,c);
+                v->addEdge(n,c);
                 Graph.insert(pair<unsigned int,Node*>(b,v));
             }
 
@@ -85,7 +86,7 @@ int main(){
         if( a > N ) N=a;
         if( b > N ) N=b;
 
-        E++;
+        E+=1;
     }
     N++;
 
