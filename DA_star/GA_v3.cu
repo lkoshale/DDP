@@ -281,7 +281,7 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
         int front = id* ( (N+K-1)/K );
         int node = PQ[front];
         //check if atleast one min, dont end the a*
-        printf("%d ",Cx[node]);
+       // printf("%d ",Cx[node]);
         if(Cx[dest] > Cx[node] ){
             atomicAnd(flagEnd,0);
         }
@@ -553,7 +553,7 @@ int main(){
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
             gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
-            printf("\ninside MIN\n");
+           // printf("\ninside MIN\n");
         }
    
     }

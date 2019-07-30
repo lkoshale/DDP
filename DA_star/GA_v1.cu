@@ -54,7 +54,7 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
                     int swap = PQ[front + 2*pqIndex+2];
                     PQ[front + 2*pqIndex+2] = PQ[front +pqIndex];
                     PQ[front + pqIndex] = swap;
-                    pqIndex = 2*pqIndex+1;                    
+                    pqIndex = 2*pqIndex+2;                    
                 } 
                 else{
                     break;
