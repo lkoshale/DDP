@@ -1,0 +1,17 @@
+
+1. takes startnoe and endnode as input
+2. scans graph
+3. scans Hx
+4.  Do A* in K PQ
+----------------------
+5.open Updates.txt 
+6. scan in format : flag, u, v, w
+7. insert or delete from graph based on flag
+8. create diff graph and copy to gpu
+9. add the update nodes u->v, add v, if cost of v changes.
+10. generate update list 
+11.  prpogate till all changes are reached and no node in update list
+12. restructre the priority queue based on changes
+13. insert the destinaion if not in PQ
+14. DO A* star with k PQ
+
