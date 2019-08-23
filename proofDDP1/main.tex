@@ -1,0 +1,85 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+
+\title{A* algorithm}
+% \author{lokesh koshale}
+\date{February 2019}
+
+\usepackage{natbib}
+\usepackage{graphicx}
+
+\begin{document}
+
+%\maketitle
+
+\section{A* Algorithm}
+For detailed algorithm please refer to the appendix.
+\subsection{Proof}
+$h(x) $ is heuristics value for node $x$\\
+$g(x) $ is distance from source to node $x$.\\
+$C(x) = h(x) + g(x). $ we will refer C(x) as cost value of node $x$.\\
+$P(x) $ is set of all the parents of $x$.\\
+\\
+\textit{Claim:} At any step t of the algorithm if node u with cost value $C(u)$ is picked then we have already computed cost value for all nodes $n$ whose (i) $C(n) < C(u)$ and  (ii) $\exists \hspace{2mm} p \hspace{1mm} \epsilon \hspace{1mm} P(n),\hspace{1mm} C(p) < C(u)$.\\
+\\
+\\
+\textit{Proof:}\\
+Let at step t we picked node $d$ with cost value $C(d)$\\
+Suppose there exists a node $a$ with cost value $C(a)$ such that $C(a)< C(d)$ and its not computed before t.\\
+then,
+\\
+\\
+case(i): if for all parents $p$ of node $a$, either $C(p)$ is greater then $C(d)$ or its cost value is not computed then node $a$ violates part (ii) of claim so our assumptions holds.  
+\\
+\\
+case(ii): If there exists a parent $p$ of node $a$ whose cost value is computed and  $C(p) < C(d) $ then, from step  3 (a) ( see appendix ) we always chose the node with least $C(x)$, which implies $p$ would be picked before $d$. As node $a$ is a successor of $p$ at step 3 (d) (iii) the cost value of node $a$ would be computed.\\
+which contradicts our assumption that $C(a)$ is not computed. Also as $C(a)< C(d)$ it would be visited(picked) before $d$.
+\\
+\\
+\\
+\textit{Claim:} Follows from first claim\\
+If cost value of node $v$ is not computed at step t, then $C(v) \geq C(n) $ or if $C(v) < C(n) $ then $\forall \hspace{1mm} p \hspace{1mm} \epsilon $ P(v) $C(p) \geq C(n) $. \\
+\\
+\\
+\\
+\textit{Use Case:} After finding optimal path with cost $C$, If we add an edge from $u->v$ and if cost value of $u$ is not computed then ,\\ (i)the cost value v with edge $u->v$ will be greater then C, \\
+(ii)or for all parents of $u$ the cost value is greater then C which implies even if we start from source we will get same optimal path as old.\\
+So addition of such edges doesn't affect optimal path, nor the cost values of $v$.
+
+\section{Appendix }
+\begin{verbatim}
+1.  Initialize the open list
+
+2.  Initialize the closed list
+    put the starting node on the open 
+    list
+
+3.  while the open list is not empty
+    
+    a) find the node with the least C on 
+       the open list, call it "q"
+
+    b) pop q off the open list
+  
+    d) for each successor of q
+        i) if successor is the goal, stop search
+         
+        ii) successor.g = q.g + distance between successor and q
+            successor.h = distance from goal to successor
+          
+        iii) if successor.C <= successor.g + successor.h or successor.C is not set
+            then successor.C = successor.g + successor.h 
+            and if not present in open list add it to the open list.
+     end (for loop)
+  
+    e) push q on the closed list
+end (while loop) 
+    
+\end{verbatim}
+
+\bibliographystyle{plain}
+\bibliography{references}
+\href{https://www.geeksforgeeks.org/a-search-algorithm/}{Algorithm A*}
+
+\end{document}

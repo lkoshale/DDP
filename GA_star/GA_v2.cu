@@ -102,7 +102,7 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
         if(node == dest){
             atomicOr(flagfound,1);
            // *flagfound = 1;
-          //  printf("found %d\n",id);
+            printf("found %d\n",id);
         }
 
         // expand
