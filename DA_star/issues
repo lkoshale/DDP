@@ -1,0 +1,2 @@
+1. what's the Hx value for the unreachable node from destianantio  before inserts.
+2. propogate to unreachable node to find the path or do A* and add to PQ.
