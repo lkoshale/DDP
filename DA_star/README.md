@@ -1,9 +1,9 @@
 
 ## Issue 
-    - contains the logical problems in implementation
+    - contains the logical problems in implementation.
 
 ## outline.txt
- - outline of how DA_insert.cu works
+ - outline of how DA_insert.cu works.
 
 
 ## genDynamicGraph.cpp 
