@@ -857,8 +857,10 @@ int main(){
     }
 
     getCx<<<1,1>>>(endNode,D_dest_cost);
+    gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
+    gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
-    if(*H_flagfound==1){
+    if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
             printf("%d ",p);
@@ -894,15 +896,6 @@ int main(){
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
         
-        if(DEBUG){
-            for(int i=0;i<N;i++)
-                printf("%d ",H_diff_offset[i]);
-            printf("\n");
-            for(int i=0;i<insertEdge;i++)
-                printf("%d ",H_diff_edges[i]);
-            printf("\n");
-            
-        }
 
         gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
@@ -941,7 +934,7 @@ int main(){
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
         while(*H_nV_size > 0){
-            printf("update size: %d\n",*H_nV_size);
+           // printf("update size: %d\n",*H_nV_size);
 
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
