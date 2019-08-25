@@ -128,10 +128,13 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
             if(n->Edges.size() > 0){
                 int b = rand()%(n->Edges.size());
                 Node* m = n->Edges[b];
-                strEdges += "1 "+to_string(n->val)+" "+to_string(m->val)+" "+to_string(n->weights[b])+"\n";
+                if(m!=NULL){
+                    strEdges += "1 "+to_string(n->val)+" "+to_string(m->val)+" "+to_string(n->weights[b])+"\n";
+                    
+                    n->Edges[b] =  NULL;
+                    count++;
+                }
                 
-                n->Edges[b] =  NULL;
-                count++;
             }
         }
     }
