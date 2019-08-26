@@ -34,12 +34,9 @@ public:
 
 };
 
-void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph);
-
 void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string filename);
 
-void printBackCSR(int N, int E, unordered_map<unsigned int,Node*>& Graph,string filename);
-
+void deleted(unordered_map<unsigned int,Node*>& Graph);
 
 
 
@@ -103,71 +100,45 @@ int main(){
     }
     N++;
 
-    genUpdates(N,E,Graph);
-
+    deleted(Graph);
     printGraphCSR(N,E,Graph,"graph.txt");
-
-   // printBackCSR(N,E,Graph,"graph_op.txt");
 
 
 
     return 0;
 }
 
-void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
-    FILE* fptr = fopen("Updates.txt","w");
-    int remove = E/4;
-    int count = 0;
-    string strEdges = "";
-    for(int i=0;i<remove/2;i++){
-        int a = rand()%N;
-        unordered_map<unsigned int, Node*>::iterator itr;
-        itr = Graph.find(a);
-        if(itr!=Graph.end()){
-            Node* n = itr->second;
-            if(n->Edges.size() > 0){
-                int b = rand()%(n->Edges.size());
-                Node* m = n->Edges[b];
-                if(m!=NULL){
-                    strEdges += "1 "+to_string(n->val)+" "+to_string(m->val)+" "+to_string(n->weights[b])+"\n";
-                    
-                    n->Edges[b] =  NULL;
-                    count++;
+
+void deleted(unordered_map<unsigned int,Node*>& Graph){
+    FILE* fptr = fopen("Updates.txt","r");
+
+    Node * temp = new Node(-1);
+    int line;
+    while(fscanf(fptr,"%d\n",&line)!=EOF){
+        
+        for(int i=0;i<line;i++){
+            int flag;
+            int u,v;
+            unsigned int w;
+            fscanf(fptr,"%d %d %d %u\n",&flag,&u,&v,&w);
+            if(flag==0){
+                unordered_map<unsigned int,Node*>:: iterator itr;
+                itr = Graph.find(u);
+                if(itr!=Graph.end()){
+                    Node* a = itr->second;
+                    for(int i=0;i<a->Edges.size();i++){
+                        Node* b = a->Edges[i];
+                        if(b->val == v){
+                            a->Edges[i]=temp;
+                        }
+                    }
                 }
-                
+
             }
         }
     }
-
-    for(int i=0;i<remove/2;i++){
-        int a = rand()%N;
-        unordered_map<unsigned int, Node*>::iterator itr;
-        itr = Graph.find(a);
-        if(itr!=Graph.end()){
-            Node* n = itr->second;
-            if(n->Edges.size() > 0){
-                int b = rand()%(n->Edges.size());
-                Node* m = n->Edges[b];
-                if(m!=NULL){
-                    strEdges += "0 "+to_string(n->val)+" "+to_string(m->val)+" "+to_string(n->weights[b])+"\n";
-                    
-                    //n->Edges[b] =  NULL;
-                    count++;
-                }
-                
-            }
-        }
-    }
-
-
-
-    E = E-count;
-    fprintf(fptr,"%d\n",count);
-    fprintf(fptr,"%s",strEdges.c_str());
-    fclose(fptr);
-
+    
 }
-
 
 void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string filename){
     FILE* fptr = fopen(filename.c_str(),"w");
@@ -220,54 +191,4 @@ void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string 
     fprintf(fptr,"\n");
     fclose(fptr);
 
-}
-
-void printBackCSR(int N, int E, unordered_map<unsigned int,Node*>& Graph,string filename){
-    FILE* fptr = fopen(filename.c_str(),"w");
-
-    fprintf(fptr,"%d %d\n",N,E);
-    
-    vector<unsigned int> off;
-    off.push_back(0);
-    int k =0;
-    for(int i=0;i<N;i++){
-        unordered_map<unsigned int,Node*>:: iterator itr;
-        itr = Graph.find(i);
-        if(itr!=Graph.end()){
-            Node* n = itr->second;
-            for(int j=0;j<n->backEdge.size();j++){
-                fprintf(fptr,"%d ",n->backEdge[j]->val);
-                k++;
-            }
-            off.push_back(k);
-        }
-        else{
-            off.push_back(k);
-        }
-    }
-
-    fprintf(fptr,"\n");
-
-    for(int j=0;j<off.size()-1;j++){
-        fprintf(fptr,"%d ",off[j]);
-    }
-
-    fprintf(fptr,"\n");
-    
-
-    for(int i=0;i<N;i++){
-        unordered_map<unsigned int,Node*>:: iterator itr;
-        itr = Graph.find(i);
-        if(itr!=Graph.end()){
-            Node* n = itr->second;
-            for(int j=0;j<n->backWeight.size();j++){
-                fprintf(fptr,"%d ",n->backWeight[j]);
-                k++;
-            }
-        }
-    }
-    
-    fprintf(fptr,"\n");
-
-    fclose(fptr);
 }
