@@ -53,6 +53,8 @@ void insertDiff(unordered_map< unsigned int, Node*>& Graph,int a,int b,unsigned 
 void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
     int* diffOff,int* diffEdges,unsigned int* diffWeight );
 
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
+        int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size);
 
 /**** device Code *******/
 
@@ -989,7 +991,6 @@ int main(){
         else{
             printf("not found\n");
         }
-
 
     }
 
