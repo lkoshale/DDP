@@ -11,6 +11,7 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <algorithm>
 
 
 /***all macros**/
@@ -55,6 +56,8 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
     int* diffOff,int* diffEdges,unsigned int* diffWeight );
 
 void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges);
+
+void check_del_path(int u, int v,vector<int> Path, bool& flag);
 
 /**** device Code *******/
 
@@ -386,7 +389,7 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
 }
 
 
-__global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev_edges,int* rev_weight,int N,int E,
+__global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
                 int* Hx,int* parent,int* lock,int* addFlag){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
@@ -492,8 +495,8 @@ __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W
 __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
                     int N,int E, int* lock, int* parent,int* addFlag,
                     int* diff_off,int* diff_edge,unsigned int* diff_W,int dE,
-                    int* rev_offset,int* rev_edges,int* rev_weight,
-                    int* rev_diff_offset,int* rev_diff_edges,int* rev_diff_weight){
+                    int* rev_offset,int* rev_edges,unsigned int* rev_weight,
+                    int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < *size){
@@ -562,6 +565,8 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                             rstart++;
                         }
 
+                        addFlag[child]=1;
+
                     }
 
                     //end critical section
@@ -601,11 +606,47 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
 
                 if(atomicCAS(&lock[child],0,1)==0){
                     //critical section
-                    if( Cx[child] != INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
+
+                    if( Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
                         Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
                         __threadfence();
                         parent[child] = node;
         
+                        addFlag[child]=1;
+
+                    }else 
+                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node] && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
+                        //use back edges
+                        int rstart = rev_diff_offset[child];
+                        int rend = E;
+                        if(child!=N-1)
+                            rend = rev_diff_offset[child+1];
+                        
+                        //there is always one parent that is node.
+                        Cx[child] = INT_MAX;
+                        parent[child]=-1;
+
+                        while(rstart < rend){
+                            int p = rev_diff_edges[start]; 
+                            int weight = rev_diff_weight[start];
+                            int flag_cycle = false;
+                            
+                            //check parent doesn't contain child
+                            int ancestor = parent[p];
+                            while(ancestor!=-1){
+                                if(ancestor==child)
+                                    flag_cycle = true;
+                                ancestor = parent[ancestor];
+                            }
+                            
+                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                parent[child] = p;
+                            }
+                            
+                            rstart++;
+                        }
+                        
                         addFlag[child]=1;
 
                     }
@@ -802,12 +843,12 @@ int main(){
     //reverse graph
     int* D_rev_edges;
     int* D_rev_offset;
-    int* D_rev_weight;
+    unsigned int* D_rev_weight;
 
     //reverse diff
     int* D_rev_diff_offset;
     int* D_rev_diff_edges;
-    int* D_rev_diff_weight;
+    unsigned int* D_rev_diff_weight;
 
     //next nodes flag
     int* D_nVFlag;
@@ -992,23 +1033,32 @@ int main(){
     gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
     gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
+
+    vector<int> Path;
+
     if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
             printf("%d ",p);
+            Path.push_back(p);
             p = H_parent[p];
-        } 
-        printf("%d\n",startNode);
+        }
+        Path.push_back(p);
+        printf("%d\n",p);
     }
     else{
         printf("not found\n");
     }
+
+    //reverse the path to get from source to end
+    reverse(Path.begin(),Path.end());
 
     
 
     ///////////////////////////////////////////////
     // A star complete //
 
+    bool flag_do_a_star = false;
 
     FILE* fdiff = fopen("Updates.txt","r");
     int line;
@@ -1029,6 +1079,8 @@ int main(){
                 insertEdge++;
             }
             else if(flag==0){
+                //check id del edges in optimal path.
+                check_del_path(u,v,Path,flag_do_a_star);
                 removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges);
                 //add to list only if its cost changes due to this deletion
                 if(H_parent[v]==u){
@@ -1055,12 +1107,12 @@ int main(){
         //diff graph
         gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice) );
 
         //rev diff graph
         gpuErrchk ( cudaMemcpy(D_rev_diff_edges,H_rev_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_rev_diff_offset,H_rev_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_rev_diff_weight,H_rev_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_diff_weight,H_rev_diff_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice) );
 
         //reset D_nV flag
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
@@ -1109,7 +1161,9 @@ int main(){
 
             propogate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
                 N,E,D_lock,D_parent,D_nVFlag,
-                D_diff_offset,D_diff_edges,D_diff_weight,insertEdge);
+                D_diff_offset,D_diff_edges,D_diff_weight,insertEdge,
+                D_rev_offset,D_rev_edges,D_rev_weight,
+                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
@@ -1138,7 +1192,99 @@ int main(){
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
 
+        //add a* here
+        if(flag_do_a_star){
+
+            insertDest<<<1,1>>>(D_PQ_size,endNode,D_openList);
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
+
+            flag_PQ_not_empty = 0;
+            for(int i=0;i<K;i++){
+                if(H_PQ_size[i]>0)
+                    flag_PQ_not_empty=1;
+            }
+    
+            //reset flags
+            *H_flagEnd = 1;
+            *H_flagfound = 0;
+            gpuErrchk ( cudaMemcpy(D_flagfound,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+            gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+            gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    
+            //DO A* initailly on whole graph
+            while(*H_flagEnd==0 && flag_PQ_not_empty==1){
+                
+                //extract min
+                extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+    
+                cudaDeviceSynchronize();
+    
+                
+                A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
+                    D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
+                    N,E,K,endNode,D_nVFlag,D_PQ_size,
+                    true,D_diff_offset,D_diff_edges,D_diff_offset,insertEdge);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                
+                cudaDeviceSynchronize();
+    
+                keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+                
+                //gen from flag D_nV
+                //for N in parallel
+                setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+                
+    
+                insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+            
+                //cpy flagend and flagEmpty
+                gpuErrchk( cudaMemcpy(H_flagfound,D_flagfound, sizeof(int),cudaMemcpyDeviceToHost) );
+                gpuErrchk( cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost) );
+                
+                //reset nVFlag
+                gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    
+                //reset next insert array
+                gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+                gpuErrchk( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+                
+    
+                flag_PQ_not_empty = 0;
+                for(int i=0;i<K;i++){
+                    if(H_PQ_size[i]>0)
+                        flag_PQ_not_empty=1;
+                }
+    
+                //check for mins
+                if( *H_flagfound==1 && flag_PQ_not_empty==1){
+                    //end 
+                    gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+    
+                    checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
+                    
+                    gpuErrchk( cudaPeekAtLastError() );
+                    cudaDeviceSynchronize();
+                    gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+                // printf("\ninside MIN\n");
+                }
         
+            }
+
+
+        }
+
         getCx<<<1,1>>>(endNode,D_dest_cost);
         gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
@@ -1260,6 +1406,18 @@ void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offs
             break;
         }
         start++;
+    }
+
+}
+
+
+void check_del_path(int u, int v,vector<int> Path, bool& flag){
+    vector<int> :: iterator itr;
+    itr = find(Path.begin(),Path.end(),u);
+    if(itr!=Path.end()){
+        itr+=1;
+        if(*itr == v)
+            falg = true;
     }
 
 }
