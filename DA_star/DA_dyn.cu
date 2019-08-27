@@ -533,7 +533,7 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                         addFlag[child]=1;
 
                     } else 
-                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node] && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
+                    if( (Cx[node]==INT_MAX && parent[child]==node ) || ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
                         //use back edges
                         int rstart = rev_offset[child];
                         int rend = E;
@@ -615,7 +615,7 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                         addFlag[child]=1;
 
                     }else 
-                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node] && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
+                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
                         //use back edges
                         int rstart = rev_diff_offset[child];
                         int rend = E;
@@ -1067,7 +1067,7 @@ int main(){
         unordered_map<unsigned int,Node*> rev_Graph;
         
         int insertEdge=0, delEdge=0;
-        int delEdgesV_size = 0                      //v whose cost can change due to deletion
+        int delEdgesV_size = 0;                    //v whose cost can change due to deletion
         for(int i=0;i<line;i++){
             int flag;
             int u,v;
@@ -1094,7 +1094,7 @@ int main(){
         }
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
-        createDiffGraph(N.rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
+        createDiffGraph(N,rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
         
         //TODO free the graphs
 
@@ -1417,7 +1417,7 @@ void check_del_path(int u, int v,vector<int> Path, bool& flag){
     if(itr!=Path.end()){
         itr+=1;
         if(*itr == v)
-            falg = true;
+            flag = true;
     }
 
 }
