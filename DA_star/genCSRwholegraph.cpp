@@ -15,8 +15,6 @@ public:
     unsigned int val;
     vector<unsigned int> weights;
     vector<Node*> Edges;
-    vector<Node*> backEdge;
-    vector<unsigned int> backWeight;
 
     Node(int val){
         this->val = val;
@@ -27,89 +25,69 @@ public:
         this->weights.push_back(w);
     }
 
-    void addBackEdge(Node* v, unsigned int w){
-        this->backEdge.push_back(v);
-        this->backWeight.push_back(w);
-    }
-
 };
 
 void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string filename);
 
-void deleted(unordered_map<unsigned int,Node*>& Graph);
+void Update(unordered_map<unsigned int,Node*>& Graph,int& E);
 
+void insertG(unordered_map< unsigned int, Node*>& Graph,int a,int b,int c);
 
 
 int main(){
 
-    srand(42);
+    FILE* fgraph = fopen("graph.txt","r");
+    int N,E;
+    fscanf(fgraph,"%d %d\n",&N,&E);
+
+    int* H_offset = (int*)malloc(sizeof(int)*N);
+    int* H_edges  = (int*)malloc(sizeof(int)*E);
+    unsigned int* H_weight = (unsigned int*)malloc(sizeof(unsigned int)*E);
+
+    for(int i=0;i<E;i++){
+        fscanf(fgraph,"%d",&H_edges[i]);
+    }
+
+    for(int i=0;i<N;i++){
+        fscanf(fgraph,"%d",&H_offset[i]);
+    }
+
+    for(int i=0;i<E;i++){
+        fscanf(fgraph,"%u",&H_weight[i]);
+    }
 
     unordered_map<unsigned int,Node*> Graph;
 
-    unsigned int N = 0;
-    unsigned int a,b,c;
+    for(int i=0;i<N;i++){
+        int start = H_offset[i];
+        int end = E;
+        if(i != N-1){
+            end = H_offset[i+1];
+        }
 
-    int E = 0;
+        while (start < end)
+        {
+            int child = H_edges[start];
+            int weight = H_weight[start];
 
-    while( scanf("%u %u %u\n",&a,&b,&c)!=EOF){
-        // c = rand()%100;
+            insertG(Graph,i,child,weight);
+            start++;
+        }
         
-        unordered_map<unsigned int,Node*>:: iterator itr;
-        itr = Graph.find(a);
-        if(itr!=Graph.end()){
-            Node* n = itr->second;
-            unordered_map<unsigned int,Node*>:: iterator it;
-            it = Graph.find(b);
-            if(it!=Graph.end()){
-                Node* v = it->second;
-                n->addEdge(v,c);
-                v->addBackEdge(n,c);
-            }
-            else{
-                Node* v = new Node(b);
-                n->addEdge(v,c);
-                v->addBackEdge(n,c);
-                Graph.insert(pair<unsigned int,Node*>(b,v));
-            }
 
-        }
-        else{
-            Node* n =new Node(a);
-            Graph.insert(pair<unsigned int,Node*>(a,n));
-
-            unordered_map<unsigned int,Node*>:: iterator it;
-            it = Graph.find(b);
-            if(it!=Graph.end()){
-                Node* v = it->second;
-                n->addEdge(v,c);
-                v->addBackEdge(n,c);
-            }
-            else{
-                Node* v = new Node(b);
-                n->addEdge(v,c);
-                v->addBackEdge(n,c);
-                Graph.insert(pair<unsigned int,Node*>(b,v));
-            }
-
-        }
-
-        if( a > N ) N=a;
-        if( b > N ) N=b;
-
-        E++;
     }
-    N++;
-
-    deleted(Graph);
-    printGraphCSR(N,E,Graph,"graph.txt");
 
 
+    Update(Graph,E);
+    printGraphCSR(N,E,Graph,"graph_cg.txt");
+
+    fclose(fgraph);
 
     return 0;
 }
 
 
-void deleted(unordered_map<unsigned int,Node*>& Graph){
+void Update(unordered_map<unsigned int ,Node*>& Graph, int& E){
     FILE* fptr = fopen("Updates.txt","r");
 
     Node * temp = new Node(-1);
@@ -130,14 +108,56 @@ void deleted(unordered_map<unsigned int,Node*>& Graph){
                         Node* b = a->Edges[i];
                         if(b->val == v){
                             a->Edges[i]=temp;
+                            break;
                         }
                     }
                 }
 
             }
+            else if(flag==1){
+                insertG(Graph,u,v,w);
+                E++;
+            }
         }
     }
     
+}
+
+void insertG(unordered_map< unsigned int, Node*>& Graph,int a,int b,int c){
+    unordered_map<unsigned int,Node*>:: iterator itr;
+    itr = Graph.find(a);
+    if(itr!=Graph.end()){
+        Node* n = itr->second;
+        unordered_map<unsigned int,Node*>:: iterator it;
+        it = Graph.find(b);
+        if(it!=Graph.end()){
+            Node* v = it->second;
+            n->addEdge(v,c);
+        }
+        else{
+            Node* v = new Node(b);
+            n->addEdge(v,c);
+            Graph.insert(pair<unsigned int,Node*>(b,v));
+        }
+
+    }
+    else{
+        Node* n =new Node(a);
+        Graph.insert(pair<unsigned int,Node*>(a,n));
+
+        unordered_map<unsigned int,Node*>:: iterator it;
+        it = Graph.find(b);
+        if(it!=Graph.end()){
+            Node* v = it->second;
+            n->addEdge(v,c);
+        }
+        else{
+            Node* v = new Node(b);
+            n->addEdge(v,c);
+            Graph.insert(pair<unsigned int,Node*>(b,v));
+        }
+
+    }
 }
 
 void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string filename){
