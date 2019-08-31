@@ -408,12 +408,21 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
 
         //if any parent can change the cost 
         while(start< end){
-            int p = rev_edges[start]; 
+            int p = rev_edges[start];
+            
+            //del edges
+            if(p<0){
+                start++;
+                continue;
+            }
+            
             int weight = rev_weight[start];
             int flag_cycle = false;
             
+            
             //check parent doesn't contain node
             int ancestor = parent[p];
+
             while(ancestor!=-1){
                 if(ancestor==node)
                     flag_cycle = true;
@@ -425,6 +434,8 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
                 Cx[node] = (Cx[p]-Hx[p] )+weight+Hx[node];
                 parent[node] = p;
             }
+
+            start++;
         }
     
     }
@@ -545,8 +556,14 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                         parent[child]=-1;
 
                         while(rstart < rend){
-                            int p = rev_edges[start]; 
-                            int weight = rev_weight[start];
+                            int p = rev_edges[rstart]; 
+                            
+                            if(p<0){
+                                rstart++;
+                                continue;
+                            }
+
+                            int weight = rev_weight[rstart];
                             int flag_cycle = false;
                             
                             //check parent doesn't contain child
@@ -556,10 +573,13 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                                     flag_cycle = true;
                                 ancestor = parent[ancestor];
                             }
+
+                            printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
                             
                             if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
                                 Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
                                 parent[child] = p;
+                                printf("ch: %d\n",p);
                             }
                             
                             rstart++;
@@ -627,8 +647,13 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                         parent[child]=-1;
 
                         while(rstart < rend){
-                            int p = rev_diff_edges[start]; 
-                            int weight = rev_diff_weight[start];
+                            int p = rev_diff_edges[rstart]; 
+                            if(p<0){
+                                rstart++;
+                                continue;
+                            }
+
+                            int weight = rev_diff_weight[rstart];
                             int flag_cycle = false;
                             
                             //check parent doesn't contain child
@@ -700,7 +725,7 @@ __global__ void insertDest(int* PQ_size, int dest,int* openList){
 __global__ void getCx(int dest,int* val){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id==0){
-        printf("cost: %d\n",Cx[dest]);
+        //printf("cost: %d\n",Cx[dest]);
         *val = Cx[dest];
     }
 }
@@ -772,12 +797,12 @@ int main(){
 
     for(int i=0;i<N;i++){
         fscanf(fgraph,"%d",&H_offset[i]);
-        fscanf(fgraph,"%d",&H_rev_offset[i]);
+        fscanf(fgraph_rev,"%d",&H_rev_offset[i]);
     }
 
     for(int i=0;i<E;i++){
         fscanf(fgraph,"%u",&H_weight[i]);
-        fscanf(fgraph,"%u",&H_rev_weight[i]);
+        fscanf(fgraph_rev,"%u",&H_rev_weight[i]);
     }
 
     FILE* fhx = fopen("Hx.txt","r");
@@ -1035,7 +1060,7 @@ int main(){
 
 
     vector<int> Path;
-
+    printf("cost: %d\n",*H_dest_cost);
     if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
@@ -1093,6 +1118,13 @@ int main(){
             
         }
 
+        if(1)
+            printf("ins: %d, del:%d\n",insertEdge,delEdge);
+
+        //reset offset to 0 ..ie no nodes
+        memset(H_diff_offset,0,sizeof(int)*N);
+        memset(H_rev_diff_offset,0,sizeof(int)*N);
+
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
         createDiffGraph(N,rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
         
@@ -1118,13 +1150,16 @@ int main(){
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
         //add del
-        int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
-        propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,N,E,
-            D_hx,D_parent,D_lock,D_nVFlag);
+        if(delEdgesV_size>0){
+            int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
+            propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,N,E,
+                D_hx,D_parent,D_lock,D_nVFlag);
+            
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
         
-        gpuErrchk(cudaPeekAtLastError() );
-        cudaDeviceSynchronize();
-    
+        }
+        
         //N parallel
         propogateAdd<<<N_numBlocks,numThreads>>>(D_diff_offset, D_diff_edges,D_diff_weight,D_hx,D_nVFlag,
             D_lock,D_parent,N,insertEdge);
@@ -1154,8 +1189,9 @@ int main(){
         //reset nV flags
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
+
         while(*H_nV_size > 0){
-           // printf("update size: %d\n",*H_nV_size);
+           printf("update size: %d\n",*H_nV_size);
 
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
@@ -1184,6 +1220,9 @@ int main(){
             gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
         }
 
+        if(1)
+            printf("after propogate\n");
+
         //propogate complete do normal A*
         numBlocks = (K+numThreads-1)/numThreads;
         
@@ -1191,100 +1230,8 @@ int main(){
         keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
-
-        //add a* here
-        if(flag_do_a_star){
-
-            insertDest<<<1,1>>>(D_PQ_size,endNode,D_openList);
-            gpuErrchk(cudaPeekAtLastError() );
-            cudaDeviceSynchronize();
-
-            flag_PQ_not_empty = 0;
-            for(int i=0;i<K;i++){
-                if(H_PQ_size[i]>0)
-                    flag_PQ_not_empty=1;
-            }
-    
-            //reset flags
-            *H_flagEnd = 1;
-            *H_flagfound = 0;
-            gpuErrchk ( cudaMemcpy(D_flagfound,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
-            gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-            gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    
-            //DO A* initailly on whole graph
-            while(*H_flagEnd==0 && flag_PQ_not_empty==1){
-                
-                //extract min
-                extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-    
-                cudaDeviceSynchronize();
-    
-                
-                A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
-                    D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
-                    N,E,K,endNode,D_nVFlag,D_PQ_size,
-                    true,D_diff_offset,D_diff_edges,D_diff_offset,insertEdge);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-                
-                cudaDeviceSynchronize();
-    
-                keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
-                gpuErrchk(cudaPeekAtLastError() );
-                cudaDeviceSynchronize();
-                
-                //gen from flag D_nV
-                //for N in parallel
-                setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-                cudaDeviceSynchronize();
-                
-    
-                insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-                cudaDeviceSynchronize();
-            
-                //cpy flagend and flagEmpty
-                gpuErrchk( cudaMemcpy(H_flagfound,D_flagfound, sizeof(int),cudaMemcpyDeviceToHost) );
-                gpuErrchk( cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost) );
-                
-                //reset nVFlag
-                gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    
-                //reset next insert array
-                gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-                gpuErrchk( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-                
-    
-                flag_PQ_not_empty = 0;
-                for(int i=0;i<K;i++){
-                    if(H_PQ_size[i]>0)
-                        flag_PQ_not_empty=1;
-                }
-    
-                //check for mins
-                if( *H_flagfound==1 && flag_PQ_not_empty==1){
-                    //end 
-                    gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
-    
-                    checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
-                    
-                    gpuErrchk( cudaPeekAtLastError() );
-                    cudaDeviceSynchronize();
-                    gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
-                // printf("\ninside MIN\n");
-                }
         
-            }
-
-
-        }
-
+    
         getCx<<<1,1>>>(endNode,D_dest_cost);
         gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
@@ -1292,7 +1239,7 @@ int main(){
         // found or not found based on Cx
         gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
 
-        printf("dcost: %d\n",*H_dest_cost);
+        printf("updated cost: %d\n",*H_dest_cost);
         if(*H_dest_cost!=INT_MAX){
             int p = endNode;
             while(H_parent[p]!=-1){
