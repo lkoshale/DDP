@@ -382,7 +382,7 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
         int node = PQ[front];
         //check if atleast one min, dont end the a*
        // printf("%d ",Cx[node]);
-        if(Cx[dest] > Cx[node] ){
+        if( Cx[node] < Cx[dest] ){
             atomicAnd(flagEnd,0);
         }
     }
@@ -574,12 +574,12 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                                 ancestor = parent[ancestor];
                             }
 
-                            printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
+                           // printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
                             
                             if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
                                 Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
                                 parent[child] = p;
-                                printf("ch: %d\n",p);
+                                //printf("ch: %d\n",p);
                             }
                             
                             rstart++;
@@ -1083,13 +1083,13 @@ int main(){
     ///////////////////////////////////////////////
     // A star complete //
 
-    bool flag_do_a_star = false;
-
     FILE* fdiff = fopen("Updates.txt","r");
     int line;
     while(fscanf(fdiff,"%d\n",&line)!=EOF){
         unordered_map<unsigned int,Node*> Graph;
         unordered_map<unsigned int,Node*> rev_Graph;
+
+        bool flag_do_a_star = false;
         
         int insertEdge=0, delEdge=0;
         int delEdgesV_size = 0;                    //v whose cost can change due to deletion
@@ -1220,8 +1220,6 @@ int main(){
             gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
         }
 
-        if(1)
-            printf("after propogate\n");
 
         //propogate complete do normal A*
         numBlocks = (K+numThreads-1)/numThreads;
@@ -1230,7 +1228,109 @@ int main(){
         keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
+
+        //check if there is node cost in PQ less than dest
+        *H_flagEnd = 1;
+        gpuErrchk( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
+    
+        checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
         
+        gpuErrchk( cudaPeekAtLastError() );
+
+        gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+
+        //here flag end represents from above that there is a node with cost lesser     
+        if(*H_flagEnd==0 && flag_do_a_star){
+
+            printf("[INFO] doing a* after propogation\n");
+            
+            insertDest<<<1,1>>>(D_PQ_size,endNode,D_openList);
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
+
+            flag_PQ_not_empty = 0;
+            for(int i=0;i<K;i++){
+                if(H_PQ_size[i]>0)
+                    flag_PQ_not_empty=1;
+            }
+    
+            //reset flags
+            *H_flagEnd = 0;
+            *H_flagfound = 0;
+            gpuErrchk ( cudaMemcpy(D_flagfound,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+            gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+            gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    
+            //DO A* initailly on whole graph
+            while(*H_flagEnd==0 && flag_PQ_not_empty==1){
+                
+                //extract min
+                extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+    
+                cudaDeviceSynchronize();
+    
+                
+                A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
+                    D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
+                    N,E,K,endNode,D_nVFlag,D_PQ_size,
+                    true,D_diff_offset,D_diff_edges,D_diff_offset,insertEdge);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                
+                cudaDeviceSynchronize();
+    
+                keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+                
+                //gen from flag D_nV
+                //for N in parallel
+                setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+                
+    
+                insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
+                
+                gpuErrchk(cudaPeekAtLastError() );
+                cudaDeviceSynchronize();
+            
+                //cpy flagend and flagEmpty
+                gpuErrchk( cudaMemcpy(H_flagfound,D_flagfound, sizeof(int),cudaMemcpyDeviceToHost) );
+                gpuErrchk( cudaMemcpy(H_PQ_size,D_PQ_size, sizeof(int)*K,cudaMemcpyDeviceToHost) );
+                
+                //reset nVFlag
+                gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
+    
+                //reset next insert array
+                gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+                gpuErrchk( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
+                
+    
+                flag_PQ_not_empty = 0;
+                for(int i=0;i<K;i++){
+                    if(H_PQ_size[i]>0)
+                        flag_PQ_not_empty=1;
+                }
+    
+                //check for mins
+                if( *H_flagfound==1 && flag_PQ_not_empty==1){
+                    //end 
+                    gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
+    
+                    checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
+                    
+                    gpuErrchk( cudaPeekAtLastError() );
+                    cudaDeviceSynchronize();
+                    gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
+                // printf("\ninside MIN\n");
+                }
+        
+            }
+        }
     
         getCx<<<1,1>>>(endNode,D_dest_cost);
         gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
