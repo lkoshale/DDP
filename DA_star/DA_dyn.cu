@@ -585,6 +585,44 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                             rstart++;
                         }
 
+                        //newly added backedges
+                        rstart =  rev_diff_offset[child];
+                        rend = dE;
+                        if(child!=N-1)
+                            rend = rev_diff_offset[child+1];
+                    
+                        while(rstart < rend){
+                            int p = rev_diff_edges[rstart]; 
+                            
+                            if(p<0){
+                                rstart++;
+                                continue;
+                            }
+
+                            int weight = rev_diff_weight[rstart];
+                            int flag_cycle = false;
+                            
+                            //check parent doesn't contain child
+                            int ancestor = parent[p];
+                            while(ancestor!=-1){
+                                if(ancestor==child)
+                                    flag_cycle = true;
+                                ancestor = parent[ancestor];
+                            }
+
+                            // printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
+                            
+                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                parent[child] = p;
+                                //printf("ch: %d\n",p);
+                            }
+                            
+                            rstart++;
+                        }
+
+
+
                         addFlag[child]=1;
 
                     }
@@ -636,44 +674,83 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
 
                     }else 
                     if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
-                        //use back edges
-                        int rstart = rev_diff_offset[child];
-                        int rend = E;
-                        if(child!=N-1)
-                            rend = rev_diff_offset[child+1];
-                        
-                        //there is always one parent that is node.
-                        Cx[child] = INT_MAX;
-                        parent[child]=-1;
+                       //use back edges
+                       int rstart = rev_offset[child];
+                       int rend = E;
+                       if(child!=N-1)
+                           rend = rev_offset[child+1];
+                       
+                       //there is always one parent that is node.
+                       Cx[child] = INT_MAX;
+                       parent[child]=-1;
 
-                        while(rstart < rend){
-                            int p = rev_diff_edges[rstart]; 
-                            if(p<0){
-                                rstart++;
-                                continue;
-                            }
+                       while(rstart < rend){
+                           int p = rev_edges[rstart]; 
+                           
+                           if(p<0){
+                               rstart++;
+                               continue;
+                           }
 
-                            int weight = rev_diff_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child)
-                                    flag_cycle = true;
-                                ancestor = parent[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
-                        
-                        addFlag[child]=1;
+                           int weight = rev_weight[rstart];
+                           int flag_cycle = false;
+                           
+                           //check parent doesn't contain child
+                           int ancestor = parent[p];
+                           while(ancestor!=-1){
+                               if(ancestor==child)
+                                   flag_cycle = true;
+                               ancestor = parent[ancestor];
+                           }
 
+                          // printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
+                           
+                           if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                               Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                               parent[child] = p;
+                               //printf("ch: %d\n",p);
+                           }
+                           
+                           rstart++;
+                       }
+
+                       //newly added backedges
+                       rstart =  rev_diff_offset[child];
+                       rend = dE;
+                       if(child!=N-1)
+                           rend = rev_diff_offset[child+1];
+                   
+                       while(rstart < rend){
+                           int p = rev_diff_edges[rstart]; 
+                           
+                           if(p<0){
+                               rstart++;
+                               continue;
+                           }
+
+                           int weight = rev_diff_weight[rstart];
+                           int flag_cycle = false;
+                           
+                           //check parent doesn't contain child
+                           int ancestor = parent[p];
+                           while(ancestor!=-1){
+                               if(ancestor==child)
+                                   flag_cycle = true;
+                               ancestor = parent[ancestor];
+                           }
+
+                           // printf("%d :: %d :: %d\n",p,flag_cycle,Cx[p]);
+                           
+                           if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                               Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                               parent[child] = p;
+                               //printf("ch: %d\n",p);
+                           }
+                           
+                           rstart++;
+                       }
+
+                       addFlag[child]=1;
                     }
 
                     //end critical section
