@@ -139,6 +139,8 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
         }
     }
 
+
+    int delcount = 0;
     for(int i=0;i<remove/2;i++){
         int a = rand()%N;
         unordered_map<unsigned int, Node*>::iterator itr;
@@ -150,9 +152,7 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
                 Node* m = n->Edges[b];
                 if(m!=NULL){
                     strEdges += "0 "+to_string(n->val)+" "+to_string(m->val)+" "+to_string(n->weights[b])+"\n";
-                    
-                    //n->Edges[b] =  NULL;
-                    count++;
+                    delcount++;
                 }
                 
             }
@@ -162,7 +162,7 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
 
 
     E = E-count;
-    fprintf(fptr,"%d\n",count);
+    fprintf(fptr,"%d\n",count+delcount);
     fprintf(fptr,"%s",strEdges.c_str());
     fclose(fptr);
 
