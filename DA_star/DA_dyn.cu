@@ -1268,7 +1268,7 @@ int main(){
 
 
         while(*H_nV_size > 0){
-           printf("update size: %d\n",*H_nV_size);
+           //printf("update size: %d\n",*H_nV_size);
 
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
