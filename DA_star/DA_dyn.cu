@@ -365,19 +365,22 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
 
 
 __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
-                int* Hx,int* parent,int* lock,int* addFlag){
+                int* Hx,int* parent,int* parent_old,int* lock,int* addFlag){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id<delEdge){
         int node = delEdgesV[id];
         //check for the parent and add to nextflag and update the cost
+        
+
         int start = rev_offset[node];
         int end = E;
         if(node!=N-1)
             end = rev_offset[node+1];
         
         //no parent
-        parent[node]=-1;
+        // write in parent read always from old_parent
+        parent[node] = -1;
         Cx[node]=INT_MAX;
         addFlag[node]=1;
 
@@ -394,14 +397,12 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
             int weight = rev_weight[start];
             int flag_cycle = false;
             
-            
             //check parent doesn't contain node
-            int ancestor = parent[p];
-
+            int ancestor = parent_old[p];
             while(ancestor!=-1){
                 if(ancestor==node)
                     flag_cycle = true;
-                ancestor = parent[ancestor];
+                ancestor = parent_old[ancestor];
             }
 
             //no need to lock only single parent so only one node in array so one node per thread
@@ -475,7 +476,7 @@ __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W
 
 //propogate the change
 __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
-                    int N,int E, int* lock, int* parent,int* addFlag,
+                    int N,int E, int* lock, int* parent,int* parent_old,int* addFlag,
                     int* diff_off,int* diff_edge,unsigned int* diff_W,int dE,
                     int* rev_offset,int* rev_edges,unsigned int* rev_weight,
                     int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight){
@@ -506,7 +507,7 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
 
                 if(atomicCAS(&lock[child],0,1)==0){
                     //critical section
-                    
+
                     if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
                         Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
                         __threadfence();
@@ -538,11 +539,11 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                             int flag_cycle = false;
                             
                             //check parent doesn't contain child
-                            int ancestor = parent[p];
+                            int ancestor = parent_old[p];
                             while(ancestor!=-1){
                                 if(ancestor==child)
                                     flag_cycle = true;
-                                ancestor = parent[ancestor];
+                                ancestor = parent_old[ancestor];
                             }
                             
                             if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
@@ -571,11 +572,11 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                             int flag_cycle = false;
                             
                             //check parent doesn't contain child
-                            int ancestor = parent[p];
+                            int ancestor = parent_old[p];
                             while(ancestor!=-1){
                                 if(ancestor==child)
                                     flag_cycle = true;
-                                ancestor = parent[ancestor];
+                                ancestor = parent_old[ancestor];
                             }
                             
                             if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
@@ -602,7 +603,6 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
 
             start++;
         }    
-
 
         start = diff_off[node];
         end = dE;
@@ -659,11 +659,11 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                            int flag_cycle = false;
                            
                            //check parent doesn't contain child
-                           int ancestor = parent[p];
+                           int ancestor = parent_old[p];
                            while(ancestor!=-1){
                                if(ancestor==child)
                                    flag_cycle = true;
-                               ancestor = parent[ancestor];
+                               ancestor = parent_old[ancestor];
                            }
                            
                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
@@ -691,11 +691,11 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                            int flag_cycle = false;
                            
                            //check parent doesn't contain child
-                           int ancestor = parent[p];
+                           int ancestor = parent_old[p];
                            while(ancestor!=-1){
                                if(ancestor==child)
                                    flag_cycle = true;
-                               ancestor = parent[ancestor];
+                               ancestor = parent_old[ancestor];
                            }
                            
                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
@@ -720,7 +720,7 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
             }
 
             start++;
-        }    
+        }   
 
     }
                         
@@ -883,6 +883,9 @@ int main(){
     unsigned int* D_weight;
     int* D_hx;
     int* D_parent;
+
+    //for reading the ancessostor to avoid lock for write after read.
+    int* D_parent_old;
     
     //Priority queue size
     int* D_PQ_size;
@@ -932,6 +935,7 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_weight,sizeof(unsigned int)*E) );
     gpuErrchk ( cudaMalloc(&D_hx,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_parent,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_parent_old,sizeof(int)*N) );
    
     gpuErrchk ( cudaMalloc(&D_PQ_size,sizeof(int)*K) );
     
@@ -1153,7 +1157,7 @@ int main(){
         }
 
         if(1)
-            printf("[INFO] insertion:%d, deletion:%d\n",insertEdge,delEdge);
+            printf("[INFO] insertion:%d, deletion:%d, delaff:%d\n",insertEdge,delEdge,delEdgesV_size);
 
         //reset offset to 0 ..ie no nodes
         memset(H_diff_offset,0,sizeof(int)*N);
@@ -1188,9 +1192,12 @@ int main(){
             if(DEBUG)
                 printf("[INFO] Starting computing cost for deletions\n");
 
+            //old parent to check cycle
+            gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
+
             int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
             propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,N,E,
-                D_hx,D_parent,D_lock,D_nVFlag);
+                D_hx,D_parent,D_parent_old,D_lock,D_nVFlag);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
@@ -1224,14 +1231,20 @@ int main(){
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
         if(DEBUG)
-            printf("[INFO] startig propogation\n");
+            printf("[INFO] starting propogation\n");
 
         while(*H_nV_size > 0){
 
+            // if(DEBUG)
+            //     printf("[INFO] update size:%d\n",*H_nV_size);
+
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
+            //old parent to check cycle and remove locking on parent
+            gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
+
             propogate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
-                N,E,D_lock,D_parent,D_nVFlag,
+                N,E,D_lock,D_parent,D_parent_old,D_nVFlag,
                 D_diff_offset,D_diff_edges,D_diff_weight,insertEdge,
                 D_rev_offset,D_rev_edges,D_rev_weight,
                 D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight);
