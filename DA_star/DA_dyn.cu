@@ -58,7 +58,7 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
 void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges);
 
 void check_del_path(int u, int v,vector<int> Path, bool& flag);
-
+void check_cycle(int N,int* parent);
 /**** device Code *******/
 
 __device__ volatile int Cx[MAX_NODE];
@@ -368,6 +368,7 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
                 int* Hx,int* parent,int* parent_old,int* lock,int* addFlag){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
+    
     if(id<delEdge){
         int node = delEdgesV[id];
         //check for the parent and add to nextflag and update the cost
@@ -400,8 +401,10 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
             //check parent doesn't contain node
             int ancestor = parent_old[p];
             while(ancestor!=-1){
-                if(ancestor==node)
+                if(ancestor==node){
                     flag_cycle = true;
+                    break;
+                }
                 ancestor = parent_old[ancestor];
             }
 
@@ -420,7 +423,7 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
 
 //add inserted edges to propogate
 __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W,int* Hx,int* addFlag,
-            int* lock, int* parent, int N, int dE){
+            int* lock, int* parent, int* parent_old, int N, int dE){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -450,11 +453,41 @@ __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W
 
                 if(atomicCAS(&lock[child],0,1)==0){
                     //critical section
-                    if( Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
+                    bool flag_cycle = false;
+
+                    int ancestor = node;
+                    while(ancestor > 0){
+                        if(ancestor==child){
+                            flag_cycle = true;
+                            break;
+                        }
+                        ancestor = parent_old[ancestor];
                         
+                    }
+                    /*
+                    if(flag_cycle){
+                        printf("Add %d->%d,%d:%d::%d\n",node,child,Cx[node],Cx[child],(Cx[node] - Hx[node])+ diff_W[start]+ Hx[child]);
+                        if(Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child]){
+                            int ancestor = node;
+                            while(ancestor > 0){
+                                if(ancestor==child){
+                                    printf("%d:%d\n",ancestor,Cx[ancestor]);    
+                                    break;
+                                }
+                                printf("%d:%d::%d ",ancestor,Cx[ancestor],parent[ancestor]);
+                                ancestor = parent_old[ancestor];
+                                
+                            }
+                        }
+                    }*/
+
+                    if(!flag_cycle && Cx[node] != INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
+                        
+                        Cx[child] =  (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
+                
+                        parent[child] = node;
+                        __threadfence();
+
                         addFlag[child]=1;
 
                     }
@@ -480,8 +513,11 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                     int* diff_off,int* diff_edge,unsigned int* diff_W,int dE,
                     int* rev_offset,int* rev_edges,unsigned int* rev_weight,
                     int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight){
-    
+
     int id = blockIdx.x*blockDim.x+threadIdx.x;
+    
+   // printf("Entering %d\n",id);
+    
     if(id < *size){
         int node = nodes[id];
         int start = off[node];
@@ -498,112 +534,138 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                 continue;
             }
 
-            //array L initilaized with 0
-            //get the lock for child to update C(x)
-            //loop till acquire the lock
-            bool leaveLoop = false;
+            bool flag_cycle_insert = false;
 
-            while(!leaveLoop){
-
-                if(atomicCAS(&lock[child],0,1)==0){
-                    //critical section
-
-                    if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                    } else 
-                    if( (Cx[node]==INT_MAX && parent[child]==node ) || ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
-                        //use back edges
-                        int rstart = rev_offset[child];
-                        int rend = E;
-                        if(child!=N-1)
-                            rend = rev_offset[child+1];
-                        
-                        //there is always one parent that is node.
-                        Cx[child] = INT_MAX;
-                        parent[child]=-1;
-
-                        while(rstart < rend){
-                            int p = rev_edges[rstart]; 
-                            
-                            if(p<0){
-                                rstart++;
-                                continue;
-                            }
-
-                            int weight = rev_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent_old[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child)
-                                    flag_cycle = true;
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
-
-                        //newly added backedges
-                        rstart =  rev_diff_offset[child];
-                        rend = dE;
-                        if(child!=N-1)
-                            rend = rev_diff_offset[child+1];
-                    
-                        while(rstart < rend){
-                            int p = rev_diff_edges[rstart]; 
-                            
-                            if(p<0){
-                                rstart++;
-                                continue;
-                            }
-
-                            int weight = rev_diff_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent_old[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child)
-                                    flag_cycle = true;
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
-
-                        addFlag[child]=1;
-
-                    }
-
-                    //end critical section
-                    leaveLoop = true;
-
-                    atomicCAS(&lock[child],1,0);
+            int optimal_parent = node;
+            while(optimal_parent > 0){
+                if(optimal_parent == child){
+                    flag_cycle_insert = true;
+                    break;
                 }
-
-                __syncthreads();
-                
+                optimal_parent = parent_old[optimal_parent];
             }
+
+            if(!flag_cycle_insert){
+
+                //array L initilaized with 0
+                //get the lock for child to update C(x)
+                //loop till acquire the lock
+                bool leaveLoop = false;
+                
+                while(!leaveLoop){
+
+                    if(atomicExch(&lock[child],1)==0){
+                        //critical section
+    
+                        if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
+                            Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
+                            __threadfence();
+                            parent[child] = node;
+            
+                            addFlag[child]=1;
+    
+                        }
+                        else if( (Cx[node]==INT_MAX && parent[child]==node ) || ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
+                            
+                            //use back edges
+                            int rstart = rev_offset[child];
+                            int rend = E;
+                            if(child!=N-1)
+                                rend = rev_offset[child+1];
+                            
+                            //there is always one parent that is node.
+                            Cx[child] = INT_MAX;
+                            parent[child]=-1;
+    
+                            while(rstart < rend){
+                                int p = rev_edges[rstart]; 
+                                
+                                if(p<0){
+                                    rstart++;
+                                    continue;
+                                }
+    
+                                int weight = rev_weight[rstart];
+                                bool flag_cycle = false;
+                                
+                                //check parent doesn't contain child
+                            
+                                int ancestor = parent_old[p];
+                                
+                                while(ancestor > 0){
+                                    if(ancestor==child){
+                                        flag_cycle = true;
+                                        break;
+                                    }
+                                    ancestor = parent_old[ancestor];
+                                }
+                                
+                                if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                    Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                    parent[child] = p;
+                                }
+                                
+                                rstart++;
+                            }
+    
+                            
+                            //newly added backedges
+                            rstart =  rev_diff_offset[child];
+                            rend = dE;
+                            if(child!=N-1)
+                                rend = rev_diff_offset[child+1];
+                        
+                            while(rstart < rend){
+                                int p = rev_diff_edges[rstart]; 
+                                
+                                if(p<0){
+                                    rstart++;
+                                    continue;
+                                }
+    
+                                int weight = rev_diff_weight[rstart];
+                                int flag_cycle = false;
+                                
+                                //check parent doesn't contain child
+                                int ancestor = parent_old[p];
+                                while(ancestor!=-1){
+                                    if(ancestor==child){
+                                        flag_cycle = true;
+                                        break;
+                                    }
+                                        
+                                    ancestor = parent_old[ancestor];
+                                }
+                                
+                                if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                    Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                    parent[child] = p;
+                                }
+                                
+                                rstart++;
+                            }
+                            
+                            addFlag[child]=1;
+    
+                        }
+    
+                    
+                        //end critical section
+                        leaveLoop = true;
+    
+                        atomicExch(&lock[child],0);
+                    }
+    
+                    __syncthreads();
+                    
+                }
+            }
+          
 
             start++;
         }    
-
+        
+        
         start = diff_off[node];
         end = dE;
         if(node!=N-1)
@@ -618,110 +680,129 @@ __global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned in
                 continue;
             }
 
-            //array L initilaized with 0
-            //get the lock for child to update C(x)
-            //loop till acquire the lock
-            bool leaveLoop = false;
+            bool flag_cycle_insert = false;
 
-            while(!leaveLoop){
-
-                if(atomicCAS(&lock[child],0,1)==0){
-                    //critical section
-
-                    if( Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                    }else 
-                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
-                       //use back edges
-                       int rstart = rev_offset[child];
-                       int rend = E;
-                       if(child!=N-1)
-                           rend = rev_offset[child+1];
-                       
-                       //there is always one parent that is node.
-                       Cx[child] = INT_MAX;
-                       parent[child]=-1;
-
-                       while(rstart < rend){
-                           int p = rev_edges[rstart]; 
-                           
-                           if(p<0){
-                               rstart++;
-                               continue;
-                           }
-
-                           int weight = rev_weight[rstart];
-                           int flag_cycle = false;
-                           
-                           //check parent doesn't contain child
-                           int ancestor = parent_old[p];
-                           while(ancestor!=-1){
-                               if(ancestor==child)
-                                   flag_cycle = true;
-                               ancestor = parent_old[ancestor];
-                           }
-                           
-                           if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                               Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                               parent[child] = p;
-                           }
-                           
-                           rstart++;
-                       }
-
-                       rstart =  rev_diff_offset[child];
-                       rend = dE;
-                       if(child!=N-1)
-                           rend = rev_diff_offset[child+1];
-                   
-                       while(rstart < rend){
-                           int p = rev_diff_edges[rstart]; 
-                           
-                           if(p<0){
-                               rstart++;
-                               continue;
-                           }
-
-                           int weight = rev_diff_weight[rstart];
-                           int flag_cycle = false;
-                           
-                           //check parent doesn't contain child
-                           int ancestor = parent_old[p];
-                           while(ancestor!=-1){
-                               if(ancestor==child)
-                                   flag_cycle = true;
-                               ancestor = parent_old[ancestor];
-                           }
-                           
-                           if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                               Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                               parent[child] = p;
-                           }
-                           
-                           rstart++;
-                       }
-
-                       addFlag[child]=1;
-                    }
-
-                    //end critical section
-                    leaveLoop = true;
-
-                    atomicCAS(&lock[child],1,0);
+            int optimal_parent = node;
+            while(optimal_parent > 0){
+                if(optimal_parent == child){
+                    flag_cycle_insert = true;
+                    break;
                 }
-
-                __syncthreads();
-                
+                optimal_parent = parent_old[optimal_parent];
             }
 
-            start++;
-        }   
+            if(!flag_cycle_insert){
 
+                //array L initilaized with 0
+                //get the lock for child to update C(x)
+                //loop till acquire the lock
+                bool leaveLoop = false;
+
+                while(!leaveLoop){
+
+                    if(atomicCAS(&lock[child],0,1)==0){
+                        //critical section
+    
+                        if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
+                            Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
+                            __threadfence();
+                            parent[child] = node;
+            
+                            addFlag[child]=1;
+    
+                        }else 
+                        if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
+                           //use back edges
+                           int rstart = rev_offset[child];
+                           int rend = E;
+                           if(child!=N-1)
+                               rend = rev_offset[child+1];
+                           
+                           //there is always one parent that is node.
+                           Cx[child] = INT_MAX;
+                           parent[child]=-1;
+    
+                           while(rstart < rend){
+                               int p = rev_edges[rstart]; 
+                               
+                               if(p<0){
+                                   rstart++;
+                                   continue;
+                               }
+    
+                               int weight = rev_weight[rstart];
+                               int flag_cycle = false;
+                               
+                               //check parent doesn't contain child
+                               int ancestor = parent_old[p];
+                               while(ancestor!=-1){
+                                   if(ancestor==child)
+                                       flag_cycle = true;
+                                   ancestor = parent_old[ancestor];
+                               }
+                               
+                               
+                               if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                   Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                   parent[child] = p;
+                               }
+                               
+                               rstart++;
+                           }
+    
+                           rstart =  rev_diff_offset[child];
+                           rend = dE;
+                           if(child!=N-1)
+                               rend = rev_diff_offset[child+1];
+                       
+                           while(rstart < rend){
+                               int p = rev_diff_edges[rstart]; 
+                               
+                               if(p<0){
+                                   rstart++;
+                                   continue;
+                               }
+    
+                               int weight = rev_diff_weight[rstart];
+                               int flag_cycle = false;
+                               
+                               //check parent doesn't contain child
+                               int ancestor = parent_old[p];
+                               while(ancestor!=-1){
+                                   if(ancestor==child){
+                                    flag_cycle = true;
+                                    break;
+                                   }
+                                       
+                                   ancestor = parent_old[ancestor];
+                               }
+                               
+                               if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                   Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                   parent[child] = p;
+                               }
+                               
+                               rstart++;
+                           }
+    
+                           addFlag[child]=1;
+                        }
+    
+                        //end critical section
+                        leaveLoop = true;
+    
+                        atomicCAS(&lock[child],1,0);
+                    }
+    
+                    __syncthreads();
+                    
+                }
+            }
+           
+        
+            start++;
+        } 
+        
     }
                         
 }
@@ -814,12 +895,12 @@ int main(){
     int* H_dest_cost = (int*)malloc(sizeof(int));
     
     memset(H_PQ_size,0,sizeof(int)*K);
-    memset(H_parent,-1,sizeof(int)*N);
     memset(H_openList,-1,sizeof(int)*N);
 
     //init cx
     for(int i=0;i<N;i++){
         H_cx[i]=INT_MAX;
+        H_parent[i]=-1;
     }
 
     for(int i=0;i<E;i++){
@@ -1117,6 +1198,8 @@ int main(){
     //reverse the path to get from source to end
     reverse(Path.begin(),Path.end());
 
+    //
+   // check_cycle(N,H_parent);
     
     ///////////////////////////////////////////////
     // A star complete //
@@ -1203,18 +1286,29 @@ int main(){
             cudaDeviceSynchronize();
         
         }
+        
+        //
+        // gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
+        // check_cycle(N,H_parent);
 
         if(DEBUG)
             printf("[INFO] starting computing cost for inserions\n");
+
+        
+        gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
         
         //N parallel
         propogateAdd<<<N_numBlocks,numThreads>>>(D_diff_offset, D_diff_edges,D_diff_weight,D_hx,D_nVFlag,
-            D_lock,D_parent,N,insertEdge);
+            D_lock,D_parent,D_parent_old,N,insertEdge);
         
         //add in next set of nodes
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
         
+        //
+        // gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
+        // check_cycle(N,H_parent);
+
 
         gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
 
@@ -1233,15 +1327,14 @@ int main(){
         if(DEBUG)
             printf("[INFO] starting propogation\n");
 
-        while(*H_nV_size > 0){
-
-            // if(DEBUG)
-            //     printf("[INFO] update size:%d\n",*H_nV_size);
+        while(*H_nV_size > 0){                
 
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
             //old parent to check cycle and remove locking on parent
             gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
+
+            printf("[INFO] update size:%d\n",*H_nV_size);
 
             propogate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
                 N,E,D_lock,D_parent,D_parent_old,D_nVFlag,
@@ -1519,4 +1612,26 @@ void check_del_path(int u, int v,vector<int> Path, bool& flag){
             flag = true;
     }
 
+}
+
+void check_cycle(int N,int* parent){
+    int flag = 0;
+    for(int i=0;i<N;i++){
+        
+        vector<int> visited(N,0);
+        int ancestor = parent[i];
+        while(ancestor > 0){
+            if(visited[ancestor]==1){
+                printf("cycle at: %d, %d\n",i,ancestor); 
+                flag =1;
+                break;
+            }
+
+            visited[ancestor]=1;
+            ancestor = parent[ancestor];
+        }
+        
+    }
+    if(flag==0)
+        printf("no cycle\n");
 }
