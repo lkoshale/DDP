@@ -57,6 +57,10 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
 
 void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges);
 
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
+    int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
+    int* mOffset,int* mEdges,unsigned int* mWeight);
+
 void check_del_path(int u, int v,vector<int> Path, bool& flag);
 void check_cycle(int N,int* parent);
 /**** device Code *******/
@@ -875,20 +879,11 @@ int main(){
     int* H_PQ_size = (int*)malloc(sizeof(int)*K);
 
 
-    //for diff
-    int* H_diff_edges = (int*)malloc(sizeof(int)*E);
-    int* H_diff_offset = (int*)malloc(sizeof(int)*N);
-    unsigned int* H_diff_weight = (unsigned int*)malloc(sizeof(unsigned int)*E);
 
     //for reverse graph
     int* H_rev_edges = (int*)malloc(sizeof(int)*E);
     int* H_rev_offset = (int*)malloc(sizeof(int)*N);
     unsigned int* H_rev_weight = (unsigned int*)malloc(sizeof(unsigned int)*E);
-   
-    //diff for revrse graph
-    int* H_rev_diff_edges = (int*)malloc(sizeof(int)*E);
-    int* H_rev_diff_offset = (int*)malloc(sizeof(int)*N);
-    unsigned int* H_rev_diff_weight = (unsigned int*)malloc(sizeof(unsigned int)*E);
 
 
     //for cost of endNode
@@ -1026,21 +1021,10 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_dest_cost,sizeof(int)) );
     gpuErrchk ( cudaMalloc(&D_delEdgesV,sizeof(int)*E) );
 
-
-    //diff csr
-    gpuErrchk ( cudaMalloc(&D_diff_edges,sizeof(int)*E) );
-    gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*(N+1) ) );   //coz
-    gpuErrchk ( cudaMalloc(&D_diff_weight,sizeof(unsigned int)*E) );
-
     //rev graph
     gpuErrchk ( cudaMalloc(&D_rev_edges,sizeof(int)*E) );
     gpuErrchk ( cudaMalloc(&D_rev_offset,sizeof(int)*N ) );   
     gpuErrchk ( cudaMalloc(&D_rev_weight,sizeof(unsigned int)*E) );
-
-    //rev diff graph
-    gpuErrchk ( cudaMalloc(&D_rev_diff_edges,sizeof(int)*E) );
-    gpuErrchk ( cudaMalloc(&D_rev_diff_offset,sizeof(int)*N ) );   
-    gpuErrchk ( cudaMalloc(&D_rev_diff_weight,sizeof(unsigned int)*E) );
 
 
     //for next set of vertices to add in PQ
@@ -1239,12 +1223,35 @@ int main(){
             
         }
 
-        if(1)
-            printf("[INFO] insertion:%d, deletion:%d, delaff:%d\n",insertEdge,delEdge,delEdgesV_size);
+        // inseetEdge is insertion size
+        //for diff
+        int* H_diff_edges = (int*)malloc(sizeof(int)*insertEdge);
+        int* H_diff_offset = (int*)malloc(sizeof(int)*N);
+        unsigned int* H_diff_weight = (unsigned int*)malloc(sizeof(unsigned int)*insertEdge);
+
+        //diff for revrse graph
+        int* H_rev_diff_edges = (int*)malloc(sizeof(int)*insertEdge);
+        int* H_rev_diff_offset = (int*)malloc(sizeof(int)*N);
+        unsigned int* H_rev_diff_weight = (unsigned int*)malloc(sizeof(unsigned int)*insertEdge);
+
+        //diff csr
+        gpuErrchk ( cudaMalloc(&D_diff_edges,sizeof(int)*insertEdge) );
+        gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*(N+1) ) );   //coz
+        gpuErrchk ( cudaMalloc(&D_diff_weight,sizeof(unsigned int)*insertEdge) );
+        
+
+        //rev diff graph
+        gpuErrchk ( cudaMalloc(&D_rev_diff_edges,sizeof(int)*insertEdge) );
+        gpuErrchk ( cudaMalloc(&D_rev_diff_offset,sizeof(int)*(N+1) ) );   
+        gpuErrchk ( cudaMalloc(&D_rev_diff_weight,sizeof(unsigned int)*insertEdge) );
+
 
         //reset offset to 0 ..ie no nodes
         memset(H_diff_offset,0,sizeof(int)*N);
         memset(H_rev_diff_offset,0,sizeof(int)*N);
+
+        if(1)
+            printf("[INFO] insertion:%d, deletion:%d, delaff:%d\n",insertEdge,delEdge,delEdgesV_size);
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
         createDiffGraph(N,rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
@@ -1258,14 +1265,14 @@ int main(){
         gpuErrchk ( cudaMemcpy(D_delEdgesV,H_delEdgesV,sizeof(int)*E,cudaMemcpyHostToDevice) );
 
         //diff graph
-        gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*insertEdge,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(unsigned int)*insertEdge,cudaMemcpyHostToDevice) );
 
         //rev diff graph
-        gpuErrchk ( cudaMemcpy(D_rev_diff_edges,H_rev_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_diff_edges,H_rev_diff_edges,sizeof(int)*insertEdge,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_rev_diff_offset,H_rev_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_rev_diff_weight,H_rev_diff_weight,sizeof(unsigned int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_diff_weight,H_rev_diff_weight,sizeof(unsigned int)*insertEdge,cudaMemcpyHostToDevice) );
 
         //reset D_nV flag
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
@@ -1483,21 +1490,114 @@ int main(){
         // found or not found based on Cx
         gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
 
-        printf("[OUT] Updated Cost: %d\n",*H_dest_cost);
-        printf("[OUT] PATH(in reverse): ");
+        //remove old path
+        Path.clear();
+        printf("[OUT] Cost: %d\n",*H_dest_cost);
+        printf("[OUT] Path(in reverse): ");
         if(*H_dest_cost!=INT_MAX){
             int p = endNode;
             while(H_parent[p]!=-1){
                 printf("%d ",p);
+                Path.push_back(p);
                 p = H_parent[p];
-            } 
-            printf("%d\n",startNode);
+            }
+            Path.push_back(p);
+            printf("%d\n",p);
         }
         else{
             printf("not found\n");
         }
 
+        //reverse the path to get from source to end
+        reverse(Path.begin(),Path.end());
+
+        
+        //merge graph
+        int* H_offset_new,*H_edges_new;
+        unsigned int* H_weight_new;
+        
+        int E_new = E + insertEdge - delEdge;
+
+        H_offset_new = (int*)malloc(sizeof(int)*N);
+        H_edges_new =  (int*)malloc(sizeof(int)*E_new);
+        H_weight_new = (unsigned int*)malloc(sizeof(unsigned int)*E_new);
+
+        mergeDiff(H_offset,H_edges,H_weight,N,E,
+            H_diff_offset,H_diff_edges,H_diff_weight,insertEdge,delEdge,
+            H_offset_new,H_edges_new,H_weight_new);
+
+        //free pointer
+        free(H_offset);
+        free(H_edges);
+        free(H_weight);
+        free(H_diff_offset);
+        free(H_diff_edges);
+        free(H_diff_weight);
+
+        H_offset = H_offset_new;
+        H_edges = H_edges_new;
+        H_weight = H_weight_new;
+        
+        //cudaFree and cpy
+        cudaFree(D_edges);
+        cudaFree(D_weight);
+        cudaFree(D_diff_edges);
+        cudaFree(D_diff_offset);
+        cudaFree(D_diff_weight);
+
+        gpuErrchk ( cudaMalloc(&D_edges,sizeof(int)*E_new) );
+        gpuErrchk ( cudaMalloc(&D_weight,sizeof(unsigned int)*E_new) );
+   
+        gpuErrchk ( cudaMemcpy(D_offset,H_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E_new,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_weight,H_weight,sizeof(unsigned int)*E_new,cudaMemcpyHostToDevice) );
+
+        //merge rev graph
+        int* H_rev_offset_new,*H_rev_edges_new;
+        unsigned int* H_rev_weight_new;
+
+        H_rev_offset_new = (int*)malloc(sizeof(int)*N);
+        H_rev_edges_new =  (int*)malloc(sizeof(int)*E_new);
+        H_rev_weight_new = (unsigned int*)malloc(sizeof(unsigned int)*E_new);
+        
+        mergeDiff(H_rev_offset,H_rev_edges,H_rev_weight,N,E,
+            H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight,insertEdge,delEdge,
+            H_rev_offset_new,H_rev_edges_new,H_rev_weight_new);
+        
+        free(H_rev_offset);
+        free(H_rev_edges);
+        free(H_rev_weight);
+        free(H_rev_diff_offset);
+        free(H_rev_diff_edges);
+        free(H_rev_diff_weight);
+        
+        H_rev_offset = H_rev_offset_new;
+        H_rev_edges = H_rev_edges_new;
+        H_rev_weight = H_rev_weight_new;
+
+        //cuda free and cpy
+        cudaFree(D_rev_edges);
+        cudaFree(D_rev_weight);
+        cudaFree(D_rev_diff_edges);
+        cudaFree(D_rev_diff_offset);
+        cudaFree(D_rev_diff_weight);
+
+        gpuErrchk ( cudaMalloc(&D_rev_edges,sizeof(int)*E_new) );
+        gpuErrchk ( cudaMalloc(&D_rev_weight,sizeof(unsigned int)*E_new) );
+
+        gpuErrchk ( cudaMemcpy(D_rev_offset,H_rev_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_edges,H_rev_edges,sizeof(int)*E_new,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_weight,H_rev_weight,sizeof(unsigned int)*E_new,cudaMemcpyHostToDevice) );
+
+        //change E
+        E = E_new;
+        cudaFree(D_delEdgesV);
+        gpuErrchk ( cudaMalloc(&D_delEdgesV,sizeof(int)*E) );
+        
     }
+
+    //cuda free
+    // free everything
 
 }
 
@@ -1564,16 +1664,23 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
                 weightCount++;
             }
 
-            diffOff[offindex] = k;
-            offindex++;
+            if(offindex < N ){
+                diffOff[offindex] = k;
+                offindex++;
+            }
+            
         }
         else{
-            diffOff[offindex] = k;
-            offindex++;
+            if(offindex < N ){
+                diffOff[offindex] = k;
+                offindex++;
+            }
+           
         }
     }
 
 }
+
 
 void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges){
     int start = offset[u];
@@ -1634,4 +1741,66 @@ void check_cycle(int N,int* parent){
     }
     if(flag==0)
         printf("no cycle\n");
+}
+
+
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
+            int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
+            int* mOffset,int* mEdges,unsigned int* mWeight){
+
+  
+    mOffset[0] = 0;
+    int edegOffset= 0;
+    for(int i=0;i<N;i++){
+
+        int start = offset[i];
+        int end = E;
+        if(i!=N-1)
+            end = offset[i+1];
+        int count = 0;
+        while(start<end){
+            int child = edges[start];
+            if(child!=-1){
+                mEdges[edegOffset+count] = child;
+                mWeight[edegOffset+count] = weight[start];
+                count++;
+            }
+            start++;
+        }
+
+        start = diff_offset[i];
+        end =  insert_size;
+        if(i!=N-1)
+            end = diff_offset[i+1];
+        while(start<end){
+            int child = diff_edges[start];
+            if(child!=-1){
+                mEdges[edegOffset+count] = child;
+                mWeight[edegOffset+count]= diff_weight[start];
+                count++;
+            }
+            start++;
+        }
+
+        edegOffset+=count;
+        if(i!=N-1)
+            mOffset[i+1]=edegOffset;
+    }
+
+    //change E
+
+
+    // for(int i=0;i<mE;i++){
+    //     printf("%d ",mEdges[i]);
+    // }
+    // printf("\n");
+    // for(int i=0;i<N;i++){
+    //     printf("%d ",mOffset[i]);
+    // }
+    // printf("\n");
+    // for(int i=0;i<mE;i++){
+    //     printf("%d ",mWeight[i]);
+    // }
+    // printf("\n");
+
 }
