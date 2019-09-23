@@ -939,9 +939,6 @@ int main(){
     int* H_nVFlag = (int*)malloc(sizeof(int)*N);
     memset(H_nVFlag,-1,sizeof(int)*N);    
 
-    //list of nodes v of deleted edges u->v
-    int* H_delEdgesV = (int*)malloc(sizeof(int)*E);
-
     *H_flagEnd = 0;
     *H_flagfound = 0;
     *H_a0 = 0;
@@ -1019,7 +1016,6 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_lock,sizeof(int)*N) );
 
     gpuErrchk ( cudaMalloc(&D_dest_cost,sizeof(int)) );
-    gpuErrchk ( cudaMalloc(&D_delEdgesV,sizeof(int)*E) );
 
     //rev graph
     gpuErrchk ( cudaMalloc(&D_rev_edges,sizeof(int)*E) );
@@ -1191,6 +1187,11 @@ int main(){
     FILE* fdiff = fopen("Updates.txt","r");
     int line;
     while(fscanf(fdiff,"%d\n",&line)!=EOF){
+        
+        //list of nodes v of deleted edges u->v
+        int* H_delEdgesV = (int*)malloc(sizeof(int)*E);
+        gpuErrchk ( cudaMalloc(&D_delEdgesV,sizeof(int)*E) );
+
         unordered_map<unsigned int,Node*> Graph;
         unordered_map<unsigned int,Node*> rev_Graph;
 
@@ -1591,8 +1592,9 @@ int main(){
 
         //change E
         E = E_new;
+        
         cudaFree(D_delEdgesV);
-        gpuErrchk ( cudaMalloc(&D_delEdgesV,sizeof(int)*E) );
+        free(H_delEdgesV);
         
     }
 
