@@ -55,9 +55,9 @@ void insertDiff(unordered_map< unsigned int, Node*>& Graph,int a,int b,unsigned 
 void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
     int* diffOff,int* diffEdges,unsigned int* diffWeight );
 
-void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges);
+void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges,int& del_size);
 
-void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
     int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
     int* mOffset,int* mEdges,unsigned int* mWeight);
 
@@ -1245,14 +1245,16 @@ int main(){
             else if(flag==0){
                 //check id del edges in optimal path.
                 check_del_path(u,v,Path,flag_do_a_star);
-                removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges);
+
+                //if deleted adds to delEdge
+                removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges,delEdge);
                 //add to list only if its cost changes due to this deletion
                 if(H_parent[v]==u){
                     H_delEdgesV[delEdgesV_size]=v;
                     delEdgesV_size++;
                 }
                 
-                delEdge++;
+                // delEdge++;
             }
             
         }
@@ -1856,14 +1858,17 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
 }
 
 
-void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges){
+void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges,int& del_size){
     int start = offset[u];
     int end =  E;
+    bool flag_done = false;
+    bool flag_done_rev = false;
     if(u!=N-1)
         end = offset[u+1];
     while(start<end){
         if( v == edges[start]){
             edges[start]=-1;
+            flag_done = true;
             break;
         }
         start++;
@@ -1876,10 +1881,17 @@ void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offs
     while(start < end){
         if(u == rev_edges[start]){
             rev_edges[start] = -1;
+            flag_done_rev = true;
             break;
         }
         start++;
     }
+
+    if(flag_done && flag_done_rev)
+        del_size++;
+    
+    if( (flag_done && !flag_done_rev)|| (!flag_done && flag_done_rev) )
+        printf("[ERROR] edge present in front ot back graph\n");
 
 }
 
@@ -1918,11 +1930,12 @@ void check_cycle(int N,int* parent){
 }
 
 
-void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
             int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
             int* mOffset,int* mEdges,unsigned int* mWeight){
 
   
+    int E_new = E + insert_size - del_size;
     mOffset[0] = 0;
     int edegOffset= 0;
     for(int i=0;i<N;i++){
@@ -1931,13 +1944,13 @@ void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
         int end = E;
         if(i!=N-1)
             end = offset[i+1];
-        int count = 0;
+        //int count = 0;
         while(start<end){
             int child = edges[start];
             if(child!=-1){
-                mEdges[edegOffset+count] = child;
-                mWeight[edegOffset+count] = weight[start];
-                count++;
+                mEdges[edegOffset] = child;
+                mWeight[edegOffset] = weight[start];
+                edegOffset++;
             }
             start++;
         }
@@ -1949,14 +1962,17 @@ void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
         while(start<end){
             int child = diff_edges[start];
             if(child!=-1){
-                mEdges[edegOffset+count] = child;
-                mWeight[edegOffset+count]= diff_weight[start];
-                count++;
+                mEdges[edegOffset] = child;
+                mWeight[edegOffset]= diff_weight[start];
+                edegOffset++;
             }
             start++;
         }
 
-        edegOffset+=count;
+        if(edegOffset > E_new){
+            printf("ERROR: size %d::%d\n",E_new,edegOffset);
+        }
+
         if(i!=N-1)
             mOffset[i+1]=edegOffset;
     }
