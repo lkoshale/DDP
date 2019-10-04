@@ -99,7 +99,7 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
 __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,volatile int* Cx,
     int* expandNodes,int* expandNodes_size, int* lock ,int* flagfound,int* openList,
     int N,int E, int K,int dest,int* nVFlag,int* PQ_size,
-    int flagDiff,int* diff_off,int* diff_edge,int* diff_weight,int dE ){
+    int flagDiff,int* diff_off,int* diff_edge,unsigned int* diff_weight,int dE ){
        
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -354,10 +354,9 @@ int main(){
     int startNode,endNode;
     scanf("%d %d",&startNode,&endNode);
 
-    FILE* fgraph = fopen("graph.txt","r");
-    FILE* fgraph_rev = fopen("graph_op.txt","r");
+    FILE* fgraph = fopen("graph_cg.txt","r");
     int N,E;
-    fscanf(fgraph_rev,"%d %d\n",&N,&E);
+   
     fscanf(fgraph,"%d %d\n",&N,&E);
     
 
@@ -415,7 +414,7 @@ int main(){
 
     fclose(fgraph);
     fclose(fhx);
-    fclose(fgraph_rev);
+    
     printf("[INFO] completed taking input\n");
 
     //init Host var
