@@ -6,10 +6,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <iostream>
+#include <vector>
+#include <unordered_map>
+#include <string>
+#include <algorithm>
 
+
+using namespace std;
+
+/***all macros**/
 #define  MAX_NODE  100000000
-#define  DEBUG 0
-
+#define  DEBUG 1
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -22,12 +31,14 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 }
 
 
-__device__ volatile int Cx[MAX_NODE];
+/**** device Code *******/
+
+// __device__ volatile int Cx[MAX_NODE];
 __device__ volatile int PQ[MAX_NODE];
 
 
 //K in parallel
-__global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,int* openList,int N,int K){
+__global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,int* Cx,int* openList,int N,int K){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -36,8 +47,6 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
         //extract min from PQ
         int front = id* ( (N+K-1)/K );
         int node = PQ[front];
-
-        // printf("extract min %d %d\n",id,node);
 
         // restructure the heap
         PQ[front]=PQ[front+PQ_size[id]-1];
@@ -87,10 +96,10 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
 
 
 //for K in parallel
-__global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,
+__global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,volatile int* Cx,
     int* expandNodes,int* expandNodes_size, int* lock ,int* flagfound,int* openList,
     int N,int E, int K,int dest,int* nVFlag,int* PQ_size,
-    int flagDiff,int* diff_off,int* diff_edge,int* diff_weight ){
+    int flagDiff,int* diff_off,int* diff_edge,int* diff_weight,int dE ){
        
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -101,8 +110,6 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
         //reach dest
         if(node == dest){
             atomicOr(flagfound,1);
-           // *flagfound = 1;
-          //  printf("found %d\n",id);
         }
 
         // expand
@@ -111,10 +118,6 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
         if(node!=N-1)
             end = off[node+1];
         
-        
-        if(DEBUG)
-            printf("%d$expand %d:\n",id,start);
-
         while(start < end){ 
             int child = edge[start];
             
@@ -123,7 +126,6 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
                 start++;
                 continue;
             }
-
 
             //array L initilaized with 0
             //get the lock for child to update C(x)
@@ -139,9 +141,6 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
                         __threadfence();
                         parent[child] = node;
         
-                        if(DEBUG)
-                            printf("exp: %d %d\n",node,child);
-        
                         if(openList[child]==-1){
                             nVFlag[child]=1;
                             //add only once
@@ -153,28 +152,75 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
 
                     atomicCAS(&lock[child],1,0);
 
-                    // if(DEBUG)
-                    //     printf("im not deadlocked\n");
                 }
 
                 __syncthreads();
-                if(DEBUG)
-                    printf("%d$ stuck here\n",id);
-                
+
             }
 
             start++;
         }
 
-        if(DEBUG)
-            printf("%d outside while\n",id);
-    }
+        //diff expand
+        if(flagDiff){
+
+            start = diff_off[node];
+            end = dE;
+            if(node!=N-1)
+                end = diff_off[node+1];
+
+            while(start<end){ 
+                int child = diff_edge[start];
+                
+                //deleted edges
+                if(child<0){
+                    start++;
+                    continue;
+                }
+    
+                //array L initilaized with 0
+                //get the lock for child to update C(x)
+                bool leaveLoop = false;
+
+                while(!leaveLoop){
+
+                    if(atomicCAS(&lock[child],0,1)==0){
+                        //critical section
+                        if( Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
+                            Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
+                            __threadfence();
+                            parent[child] = node;
+            
+                            if(openList[child]==-1){
+                                nVFlag[child]=1;
+                                //add only once
+                            }
+                        }
+
+                        //end critical section
+                        leaveLoop = true;
+
+                        atomicCAS(&lock[child],1,0);
+
+                    }
+
+                    __syncthreads();
+                    
+                }
+                
+                start++;
+            }
+            
+        }
+        //end diff
+        
+    }//end 
 
 }
 
 
 //K in parallel -- O(N)
-__global__ void keepHeapPQ(int* PQ_size,int N,int K){
+__global__ void keepHeapPQ(int* PQ_size,int* Cx,int N,int K){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < K && PQ_size[id] > 0){
         int front  = id*( (N+K-1)/K );
@@ -227,33 +273,35 @@ __global__ void keepHeapPQ(int* PQ_size,int N,int K){
 __global__ void setNV(int* nextFlag,int* nextV,int* nvSize,int N){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < N){
-        //printf("2: %d %d\n",id,nextFlag[id]);
         if(nextFlag[id]==1){
             int index = atomicAdd(nvSize,1);
             nextV[index]=id;
-          //  printf("2: %d\n",id);
         }
     }
 }
 
 
 //for K in parallel
-__global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openList){
+__global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int* Cx,int K,int N,int* openList){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < K){
-        // printf("id: %d\n",id);
+
         int front = id*( (N+K-1)/K );
         int i = id;
-        // if(id==0)
-        //     printf("insert: %d\n",*nVsize);
-        while(i<*nVsize){
+        
+        while(i<*nVsize){            
+            //if not already present
+            if(openList[nextV[i]]!=-1){
+                i+=K;
+                continue;
+            }
+
             PQ[front+PQS[id]]= nextV[i];
             PQS[id]+=1;
 
             //add in openList
             openList[nextV[i]] = id;
 
-            //printf("insert: %d, %d\n",nextV[i],PQS[id]);
             if(PQS[id]>1){
                 int index = PQS[id]-1;
                 while(index>0){
@@ -274,27 +322,29 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openLi
 
 
 //for K in parallel
-__global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
+__global__ void checkMIN(int* PQ_size,int* flagEnd,int* Cx,int dest,int N,int K){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
     if(id < K && PQ_size[id] > 0 ){
         int front = id* ( (N+K-1)/K );
         int node = PQ[front];
         //check if atleast one min, dont end the a*
-       // printf("%d ",Cx[node]);
-        if(Cx[dest] > Cx[node] ){
+        if( Cx[node] < Cx[dest] ){
             atomicAnd(flagEnd,0);
         }
     }
 }
 
-__global__ void printCX(int dest){
+
+__global__ void getCx(int* Cx,int dest,int* val){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id==0){
-        printf("cost: %d\n",Cx[dest]);
+        *val = Cx[dest];
     }
 }
 
+
+/**** main function ****/
 int main(){
 
     //the K PQ
@@ -305,8 +355,11 @@ int main(){
     scanf("%d %d",&startNode,&endNode);
 
     FILE* fgraph = fopen("graph.txt","r");
+    FILE* fgraph_rev = fopen("graph_op.txt","r");
     int N,E;
+    fscanf(fgraph_rev,"%d %d\n",&N,&E);
     fscanf(fgraph,"%d %d\n",&N,&E);
+    
 
     int* H_offset = (int*)malloc(sizeof(int)*N);
     int* H_edges  = (int*)malloc(sizeof(int)*E);
@@ -314,6 +367,7 @@ int main(){
     int* H_hx = (int*)malloc(sizeof(int)*N);
     int* H_cx = (int*)malloc(sizeof(int)*N);
     int* H_parent = (int*)malloc(sizeof(int)*N);
+    int* H_parent_old = (int*)malloc(sizeof(int)*N);
 
 
     int* H_PQ = (int*)malloc(sizeof(int)*N);
@@ -321,46 +375,56 @@ int main(){
     int* H_PQ_size = (int*)malloc(sizeof(int)*K);
 
 
-    //for diff
-    int* H_diff_edges = (int*)malloc(sizeof(int)*E);
-    int* H_diff_offset = (int*)malloc(sizeof(int)*N);
-    int* H_diff_weight = (int*)malloc(sizeof(int)*E);
+
+    //for cost of endNode
+    int* H_dest_cost = (int*)malloc(sizeof(int));
     
     memset(H_PQ_size,0,sizeof(int)*K);
-    memset(H_parent,-1,sizeof(int)*N);
     memset(H_openList,-1,sizeof(int)*N);
 
     //init cx
     for(int i=0;i<N;i++){
         H_cx[i]=INT_MAX;
+        H_parent[i]=-1;
     }
 
     for(int i=0;i<E;i++){
         fscanf(fgraph,"%d",&H_edges[i]);
+       
     }
 
     for(int i=0;i<N;i++){
         fscanf(fgraph,"%d",&H_offset[i]);
+       
     }
 
     for(int i=0;i<E;i++){
         fscanf(fgraph,"%u",&H_weight[i]);
+       
     }
 
     FILE* fhx = fopen("Hx.txt","r");
     for(int i=0;i<N;i++){
-        fscanf(fhx,"%d",&H_hx[i]);
+        int temp; 
+        fscanf(fhx,"%d",&temp);
+        if(temp!=-1)
+            H_hx[i]= temp;
+        else 
+            H_hx[i] = 0;   //to change
     }
 
     fclose(fgraph);
     fclose(fhx);
-    printf("completed input\n");
+    fclose(fgraph_rev);
+    printf("[INFO] completed taking input\n");
 
     //init Host var
     int* H_flagEnd = (int*)malloc(sizeof(int));
     int* H_flagfound = (int*)malloc(sizeof(int));
     int* H_a0 = (int*)malloc(sizeof(int));
 
+    int* H_nV_size = (int*)malloc(sizeof(int));
+    int* H_nV = (int*)malloc(sizeof(int)*N);
 
     //required coz if many tries to add same in diff threads high low lower
     int* H_nVFlag = (int*)malloc(sizeof(int)*N);
@@ -377,15 +441,27 @@ int main(){
     H_openList[startNode]=0;
 
 
+    //create events to record runtime
+    
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
     //graph struture
     int* D_offset;
     int* D_edges ;
     unsigned int* D_weight;
     int* D_hx;
     int* D_parent;
+
+    //for reading the ancessostor to avoid lock for write after read.
+    int* D_parent_old;
     
     //Priority queue size
     int* D_PQ_size;
+
+    //CX
+    int* D_Cx;
 
     //flag if in openList(contains which PQ)
     int* D_openList;
@@ -395,8 +471,9 @@ int main(){
     //Diff structure
     int* D_diff_edges;
     int* D_diff_offset;
-    int* D_diff_weight;
+    unsigned int* D_diff_weight;
 
+    
     //next nodes flag
     int* D_nVFlag;
     //next nodes array to insert PQ
@@ -411,23 +488,27 @@ int main(){
     int* D_flagEnd;
     int* D_flagfound;
 
+    //cost of endNode
+    int* D_dest_cost;
+    
+    
     gpuErrchk ( cudaMalloc(&D_offset,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_edges,sizeof(int)*E) );
     gpuErrchk ( cudaMalloc(&D_weight,sizeof(unsigned int)*E) );
     gpuErrchk ( cudaMalloc(&D_hx,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_parent,sizeof(int)*N) );
+    gpuErrchk ( cudaMalloc(&D_parent_old,sizeof(int)*N) );
    
+    gpuErrchk ( cudaMalloc(&D_Cx,sizeof(int)*N) );
+
     gpuErrchk ( cudaMalloc(&D_PQ_size,sizeof(int)*K) );
     
     gpuErrchk ( cudaMalloc(&D_openList,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_lock,sizeof(int)*N) );
 
+    gpuErrchk ( cudaMalloc(&D_dest_cost,sizeof(int)) );
 
-    //diff csr
-    gpuErrchk ( cudaMalloc(&D_diff_edges,sizeof(int)*E) );
-    gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*N) );
-    gpuErrchk ( cudaMalloc(&D_diff_weight,sizeof(int)*E) );
-
+    
     //for next set of vertices to add in PQ
     gpuErrchk ( cudaMalloc(&D_nV,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_nV_size,sizeof(int)) );
@@ -448,17 +529,12 @@ int main(){
     gpuErrchk ( cudaMemcpy(D_hx,H_hx,sizeof(int)*N,cudaMemcpyHostToDevice) );
     gpuErrchk ( cudaMemcpy(D_parent,H_parent,sizeof(int)*N,cudaMemcpyHostToDevice) );
     gpuErrchk ( cudaMemcpy(D_openList,H_openList,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    
-    gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice) );
-
 
 
     gpuErrchk ( cudaMemcpy(D_PQ_size,H_PQ_size,sizeof(int)*K,cudaMemcpyHostToDevice) );
 
+    gpuErrchk ( cudaMemcpy(D_Cx,H_cx,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
-    gpuErrchk ( cudaMemcpyToSymbol(Cx,H_cx, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
     gpuErrchk ( cudaMemcpyToSymbol(PQ,H_PQ, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
 
     gpuErrchk ( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
@@ -468,7 +544,6 @@ int main(){
 
     gpuErrchk ( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
     gpuErrchk ( cudaMemcpy(D_expandNodes_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-
     
     gpuErrchk ( cudaMemset(D_lock,0,sizeof(int)*N) );
 
@@ -484,31 +559,34 @@ int main(){
     int numBlocks = (K+numThreads-1)/numThreads;
     int N_numBlocks = (N+numThreads-1)/numThreads;
 
+    if(DEBUG)
+        printf("[INFO] A* started\n");
+
+
+    cudaEventRecord(start);
+   
     //DO A* initailly on whole graph
     while(*H_flagEnd==0 && flag_PQ_not_empty==1){
         
         //extract min
-        extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
+        extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_Cx,D_openList,N,K);
         
         gpuErrchk(cudaPeekAtLastError() );
 
         cudaDeviceSynchronize();
 
         
-        A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
+        A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,D_Cx,
             D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
             N,E,K,endNode,D_nVFlag,D_PQ_size,
-            false,D_diff_offset,D_diff_edges,D_diff_offset );
+            false,D_diff_offset,D_diff_edges,D_diff_weight,0);
         
         gpuErrchk(cudaPeekAtLastError() );
         
         cudaDeviceSynchronize();
 
-        if(DEBUG)
-            printf("expand over\n");
-       
 
-        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
+        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_Cx,N,K);
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
         
@@ -520,7 +598,7 @@ int main(){
         cudaDeviceSynchronize();
         
 
-        insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
+        insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,D_Cx,K,N,D_openList);
         
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -548,27 +626,38 @@ int main(){
             //end 
             gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
 
-            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
+            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,D_Cx,endNode,N,K);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
             gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
-           // printf("\ninside MIN\n");
         }
    
     }
 
-    printCX<<<1,1>>>(endNode);
+    getCx<<<1,1>>>(D_Cx,endNode,D_dest_cost);
+    gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("RUN TIME: %f\n",milliseconds);
+
+ 
     gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
 
 
-    if(*H_flagfound==1){
+    vector<int> Path;
+    printf("[OUT] Cost: %d\n",*H_dest_cost);
+    printf("[OUT] Path(in reverse): ");
+    if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
-            printf("%d ",p);
+            printf("%d ",p);  
             p = H_parent[p];
-        } 
-        printf("%d\n",startNode);
+        }
+        printf("%d\n",p);
     }
     else{
         printf("not found\n");
