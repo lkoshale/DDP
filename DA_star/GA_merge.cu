@@ -906,7 +906,7 @@ int main(){
         cudaEventSynchronize(stop);
         float mt = 0;
         cudaEventElapsedTime(&mt, start, stop);
-        printf("RUN TIME: %f\n",milliseconds);
+        printf("RUN TIME: %f\n",mt);
         milliseconds+=mt;
      
         gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
@@ -926,6 +926,8 @@ int main(){
         else{
             printf("not found\n");
         }
+
+        update_count++;
     
     }
 
