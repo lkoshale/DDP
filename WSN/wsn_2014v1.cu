@@ -665,7 +665,7 @@ int main(){
         check_failure(H_res_energy,N,H_end_A_star);
 
         count_round++;
-       // printf("round %d\n",count_round);
+       printf("round %d\n",count_round);
     }
 
     printf("rounds: %d\n",count_round);
@@ -701,7 +701,7 @@ void calc_hx(int* offset,int* edges,float* hx,float* cord_x,float* cord_y,int N,
         float dist = sqrtf( (x-dx)*(x-dx) + (y-dy)*(y-dy) );
         //hop counts 
         if(dist!=0){
-            hx[i] =  sum / (dist * count ) ;
+            hx[i] =   (dist * count )/sum ;
         }
         else
             hx[i] = 0;
@@ -723,7 +723,7 @@ void update_energy(int* route,float* res_energy,int* Nt,int* Nr,float* cord_x,fl
             Nt[start]+=1;
             float dist_sq = (cord_x[start]-cord_x[node])*(cord_x[start]-cord_x[node]) +(cord_y[start]-cord_y[node])*(cord_y[start]-cord_y[node]);
             float energy = k*(E_ELEC + E_AMP*dist_sq);
-            res_energy[start]-=energy*100;
+            res_energy[start]-=energy;
            
             start = node;
             

@@ -671,7 +671,7 @@ void calc_hx(int* offset,int* edges,float* hx,float* cord_x,float* cord_y,int N,
         float dist = sqrtf( (x-dx)*(x-dx) + (y-dy)*(y-dy) );
         //hop counts 
         if(dist!=0){
-            hx[i] =  sum / (dist * count ) ;
+            hx[i] =  (dist * count )/sum ;
         }
         else
             hx[i] = 0;

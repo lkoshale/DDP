@@ -55,7 +55,7 @@ int main(){
     y[N-1]=mean;
     
     //create graph
-    int range = 10;
+    int range = 15;
     int E = 0;
 
     unordered_map<unsigned int,Node*> Graph;
@@ -75,7 +75,7 @@ int main(){
                 continue;
             float dist_sq = (cx-x[j])*(cx-x[j]) + (cy-y[j])*(cy-y[j]);
             float dist_jc = (mean-x[j])*(mean-x[j]) + (mean-y[j])*(mean-y[j]);
-            if(dist_sq < range*range){// && dist_c > dist_jc){
+            if(dist_sq < range*range ){//&& dist_c > dist_jc){
                 Node* v = Graph[j];
                 u->addEdge(v);
                 E++;

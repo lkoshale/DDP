@@ -42,7 +42,7 @@ int main(){
 
 
     //create graph
-    int range = 10;
+    int range = 15;
     int N = x.size();
     int E = 0;
 
