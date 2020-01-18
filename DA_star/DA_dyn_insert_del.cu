@@ -66,6 +66,10 @@ void check_cycle(int N,int* parent);
 
 void computeTime(float& time,cudaEvent_t start, cudaEvent_t stop);
 
+void check_remove_cycle(int* nodes,int* size,int* rev_offset,int* rev_edges,unsigned int* rev_weight,
+                        int* parent,int N,int E,
+                        int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE);
+
 /**** device Code *******/
 
 __device__ volatile int Cx[MAX_NODE];
@@ -371,11 +375,13 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
 }
 
 
-__global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
-                int* Hx,int* parent,int* parent_old,int* lock,int* addFlag){
+__global__ void propogateDel(int* delEdgesV,int delEdge,
+                int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
+                int* Hx,volatile int* parent,int* parent_old,int* addFlag,
+                int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
-    
+
     if(id<delEdge){
         int node = delEdgesV[id];
         //check for the parent and add to nextflag and update the cost
@@ -392,6 +398,9 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
         Cx[node]=INT_MAX;
         addFlag[node]=1;
 
+        int cost = INT_MAX;
+        int opt_parent = -1;
+
         //if any parent can change the cost 
         while(start< end){
             int p = rev_edges[start];
@@ -406,24 +415,70 @@ __global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev
             int flag_cycle = false;
             
             //check parent doesn't contain node
-            int ancestor = parent_old[p];
+            int ancestor = parent[p];
+
+            while(ancestor>0){
+                if(ancestor==node){
+                    flag_cycle = true;
+                    break;
+                }
+                ancestor = parent[ancestor];
+
+            }
+            
+            //no need to lock only single parent so only one node in array so one node per thread
+            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
+                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
+                opt_parent = p;
+            }
+
+            start++;
+        }
+
+        start = rev_diff_offset[node];
+        end = dE;
+        if(node!=N-1)
+            end = rev_diff_offset[node+1];
+        
+        while(start< end){
+            int p = rev_diff_edges[start];
+            
+            //del edges
+            if(p<0){
+                start++;
+                continue;
+            }
+            
+            int weight = rev_diff_weight[start];
+            int flag_cycle = false;
+            
+            //check parent doesn't contain node
+            int ancestor = parent[p];
+       
             while(ancestor!=-1){
                 if(ancestor==node){
                     flag_cycle = true;
                     break;
                 }
-                ancestor = parent_old[ancestor];
+                ancestor = parent[ancestor];
+               
             }
-
+        
             //no need to lock only single parent so only one node in array so one node per thread
-            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[node] > (Cx[p]-Hx[p])+weight+Hx[node] ){
-                Cx[node] = (Cx[p]-Hx[p] )+weight+Hx[node];
-                parent[node] = p;
+            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
+                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
+                opt_parent = p;
             }
 
             start++;
         }
-    
+
+        //write here
+        if(cost!=INT_MAX){
+            Cx[node]=cost;
+            parent[node]=opt_parent;
+        }
+
     }
 
 }
@@ -591,7 +646,6 @@ __global__ void insert_propagate(int* nodes, int* size, int* off, int* edge,unsi
 }
 
 
-
 __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
                     int N,int E, int* lock, int* parent,int* parent_old,int* addFlag,
                     int* diff_off,int* diff_edge,unsigned int* diff_W,int dE,
@@ -658,7 +712,7 @@ __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsi
                             
                             rstart++;
                         }
-
+                        
                         rstart =  rev_diff_offset[child];
                         rend = dE;
                         if(child!=N-1)
@@ -711,6 +765,8 @@ __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsi
 
         }
 
+
+        
         start = diff_off[node];
         end = dE;
         if(node!=N-1)
@@ -823,7 +879,7 @@ __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsi
 
             start++;
         }
-
+        
     }
 
 }
@@ -1195,11 +1251,9 @@ int main(){
     if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
-            printf("%d ",p);
-            Path.push_back(p);
+            printf("%d ",p);  
             p = H_parent[p];
         }
-        Path.push_back(p);
         printf("%d\n",p);
     }
     else{
@@ -1207,12 +1261,6 @@ int main(){
     }
 
 
-    //reverse the path to get from source to end
-    reverse(Path.begin(),Path.end());
-
-    //
-   // check_cycle(N,H_parent);
-    
     ///////////////////////////////////////////////
     // A star complete //
 
@@ -1227,6 +1275,8 @@ int main(){
 
         unordered_map<unsigned int,Node*> Graph;
         unordered_map<unsigned int,Node*> rev_Graph;
+
+        vector<pair<int,int>>deleted_edges;
 
         bool flag_do_a_star = false;
         
@@ -1243,18 +1293,8 @@ int main(){
                 insertEdge++;
             }
             else if(flag==0){
-                //check id del edges in optimal path.
-                check_del_path(u,v,Path,flag_do_a_star);
-
-                //if deleted adds to delEdge
-                removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges,delEdge);
-                //add to list only if its cost changes due to this deletion
-                if(H_parent[v]==u){
-                    H_delEdgesV[delEdgesV_size]=v;
-                    delEdgesV_size++;
-                }
                 
-                // delEdge++;
+                deleted_edges.push_back(pair<int,int>(u,v));               
             }
             
         }
@@ -1287,18 +1327,12 @@ int main(){
         memset(H_rev_diff_offset,0,sizeof(int)*N);
 
         if(1)
-            printf("[INFO](%d) insertion:%d, deletion:%d, delaff:%d\n",update_count,insertEdge,delEdge,delEdgesV_size);
+            printf("[INFO](%d) insertion:%d\n",update_count,insertEdge);
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
         createDiffGraph(N,rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
         
         //TODO free the graphs
-
-        
-        //deleted edges
-        gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_rev_edges,H_rev_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
-        gpuErrchk ( cudaMemcpy(D_delEdgesV,H_delEdgesV,sizeof(int)*E,cudaMemcpyHostToDevice) );
 
         //diff graph
         gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*insertEdge,cudaMemcpyHostToDevice) );
@@ -1316,7 +1350,7 @@ int main(){
 
         //do insertion first
         if(DEBUG)
-        printf("[INFO] starting computing cost for inserions\n");
+            printf("[INFO] starting computing cost for inserions\n");
 
     
         gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
@@ -1392,6 +1426,59 @@ int main(){
 
         }
 
+        getCx<<<1,1>>>(endNode,D_dest_cost);
+        gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
+        
+        //copy parent
+        gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
+
+        Path.clear();
+        if(*H_dest_cost!=INT_MAX){
+            int p = endNode;
+            while(H_parent[p]!=-1){
+                Path.push_back(p);
+                p = H_parent[p];
+            }
+            Path.push_back(p);
+        }
+        //reverse the path to get from source to end
+        reverse(Path.begin(),Path.end());
+
+        //start computation for deletion
+        for(int j=0;j<deleted_edges.size();j++){
+            int u,v;
+            u= deleted_edges[j].first;
+            v= deleted_edges[j].second;
+
+            //check id del edges in optimal path.
+            check_del_path(u,v,Path,flag_do_a_star);
+
+            //if deleted adds to delEdge
+            removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges,delEdge);
+            //add to list only if its cost changes due to this deletion
+            if(H_parent[v]==u){
+                H_delEdgesV[delEdgesV_size]=v;
+                delEdgesV_size++;
+            }
+
+        }
+
+        //free memory
+        deleted_edges.clear();
+        deleted_edges.shrink_to_fit();      //may not but gives a hint
+
+        //deleted edges
+        gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_edges,H_rev_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_delEdgesV,H_delEdgesV,sizeof(int)*E,cudaMemcpyHostToDevice) );
+
+
+        //remove check
+        //check_cycle(N,H_parent);
+
+        if(1)
+            printf("[INFO](%d) deletion:%d, eff del:%d\n",update_count,delEdge,delEdgesV_size);
+
 
 
         //add del
@@ -1405,8 +1492,10 @@ int main(){
             int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
             
             cudaEventRecord(start);
-            propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,N,E,
-                D_hx,D_parent,D_parent_old,D_lock,D_nVFlag);
+            propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,
+                D_rev_offset,D_rev_edges,D_rev_weight,N,E,
+                D_hx,D_parent,D_parent_old,D_nVFlag,
+                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight,insertEdge);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
@@ -1435,12 +1524,13 @@ int main(){
             gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
 
-    
             if(DEBUG)
                 printf("[INFO] starting propogation for deletions\n");
             
 
             while(*H_nV_size > 0){ 
+
+                printf("delsize:%d\n",*H_nV_size);
 
                 numBlocks = (*H_nV_size+numThreads-1)/numThreads;
 
@@ -1985,3 +2075,129 @@ void computeTime(float& time,cudaEvent_t start, cudaEvent_t stop){
     time+= milliseconds;
     //printf("[INFO] run time: %f, %f\n",time,milliseconds);
 }
+
+/*
+void check_remove_cycle(int* nodes,int* size,int* rev_offset,int* rev_edges,unsigned int* rev_weight,
+            int* parent,int N,int E,
+            int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE){
+
+    for(int i=0;i<*size;i++){
+        int node = nodes[i];
+        bool cycle = false;
+
+        vector<bool>visited(N,false);
+        int ancestor = parent[node];
+        
+        while(ancestor > 0){
+            if(ancestor==node){
+                cycle  = true;
+                break;
+            }
+            if(visited[ancestor]){
+                break;
+            }
+            visited[ancestor]=true;
+            ancestor = parent[ancestor];
+        }
+
+        if(cycle){
+
+            int p_cycle = parent[node];
+
+            int start = rev_offset[node];
+            int end = E;
+            if(node!=N-1)
+                end = rev_offset[node+1];
+            
+            //no parent
+            // write in parent read always from old_parent
+
+            int cost = INT_MAX;
+            int opt_parent = -1;
+
+            //if any parent can change the cost 
+            while(start< end){
+                int p = rev_edges[start];
+                
+                //del edges
+                if(p<0 || p == p_cycle){
+                    start++;
+                    continue;
+                }
+                
+                int weight = rev_weight[start];
+                int flag_cycle = false;
+                
+                //check parent doesn't contain node
+                int ancestor = parent[p];
+                while(ancestor>0){
+                    if(ancestor==node){
+                        flag_cycle = true;
+                        break;
+                    }
+                    ancestor = parent[ancestor];
+                }
+
+                //no need to lock only single parent so only one node in array so one node per thread
+                if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
+                    cost = (Cx[p]-Hx[p] )+weight+Hx[node];
+                    opt_parent = p;
+                }
+
+                start++;
+            }
+
+            start = rev_diff_offset[node];
+            end = dE;
+            if(node!=N-1)
+                end = rev_diff_offset[node+1];
+            
+            while(start< end){
+                int p = rev_diff_edges[start];
+                
+                //del edges
+                if(p<0){
+                    start++;
+                    continue;
+                }
+                
+                int weight = rev_diff_weight[start];
+                int flag_cycle = false;
+                
+                //check parent doesn't contain node
+                int ancestor = parent[p];
+                if(node==ref)
+                    printf("%d: %d %d ",node,p,ancestor);
+                while(ancestor!=-1){
+                    if(ancestor==node){
+                        flag_cycle = true;
+                        break;
+                    }
+                    ancestor = parent[ancestor];
+                    if(node==ref)
+                        printf("%d ",ancestor);
+                }
+                if(node==ref)
+                    printf("\n");
+
+                //no need to lock only single parent so only one node in array so one node per thread
+                if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
+                    cost = (Cx[p]-Hx[p] )+weight+Hx[node];
+                    opt_parent = p;
+                }
+
+                start++;
+            }
+
+            //write here
+            if(cost!=INT_MAX){
+                Cx[node]=cost;
+                parent[node]=opt_parent;
+            }
+
+        }
+    
+    }
+
+}
+*/

@@ -1,2 +1,25 @@
 1. what's the Hx value for the unreachable node from destianantio  before inserts.
 2. propogate to unreachable node to find the path or do A* and add to PQ.
+3. parallel merge ( deletions are -1nad next  )
+
+4. while deletion match the weight for : del then re-insert, also insert first or del first.// multi edges
+5. we dont support deletion of edges inserted in updates in same cycle
+
+6. need to do A* after del , as what if thereone parent which is not visited and INT_MAX propoggates in the optimal path.
+ - when to do the A*
+    - if the edge from optimal path gets deleted and there are nodes with lesser cost than destination in openList.
+
+
+#### add new property
+1.deleting edges not the parent doesn't change the cost
+2. delting edges not in optimal path doesnt change the optimal path // no need to do A*
+
+
+######## deletion before insertion bug ########
+1.  a node u value gets increased due to deletion.
+2. a node v in subgraph of it tries to add edge v -> u. the cost of v is less do its added now we have a parent cycle as
+cost of v is based on cost of u. 
+
+
+###############
+single iteration of Deletion taking more time than doing A* whole from begining. 

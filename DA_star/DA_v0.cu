@@ -712,7 +712,7 @@ int main(){
 
     //diff csr
     gpuErrchk ( cudaMalloc(&D_diff_edges,sizeof(int)*E) );
-    gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*(N+1) ) );
+    gpuErrchk ( cudaMalloc(&D_diff_offset,sizeof(int)*(N+1) ) );   //coz
     gpuErrchk ( cudaMalloc(&D_diff_weight,sizeof(unsigned int)*E) );
 
     //for next set of vertices to add in PQ
@@ -786,9 +786,6 @@ int main(){
         
         cudaDeviceSynchronize();
 
-        if(DEBUG)
-            printf("expand over\n");
-       
 
         keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
         gpuErrchk(cudaPeekAtLastError() );
@@ -856,6 +853,8 @@ int main(){
         printf("not found\n");
     }
 
+    
+
     ///////////////////////////////////////////////
     // A star complete //
 
@@ -877,7 +876,7 @@ int main(){
         }
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
-
+        
         gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_diff_offset,H_diff_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
         gpuErrchk ( cudaMemcpy(D_diff_weight,H_diff_weight,sizeof(int)*E,cudaMemcpyHostToDevice) );

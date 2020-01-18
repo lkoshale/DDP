@@ -34,7 +34,7 @@ public:
 
 };
 
-void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph);
+void genUpdates(FILE* fptr,int N, int& E, unordered_map<unsigned int, Node*>& Graph,int K);
 
 void printGraphCSR(int N,int E,unordered_map<unsigned int,Node*>& Graph, string filename);
 
@@ -46,6 +46,8 @@ void printBackCSR(int N, int E, unordered_map<unsigned int,Node*>& Graph,string 
 int main(){
 
     srand(42);
+
+    int K = 4;
 
     unordered_map<unsigned int,Node*> Graph;
 
@@ -102,8 +104,11 @@ int main(){
         E++;
     }
     N++;
-
-    genUpdates(N,E,Graph);
+    FILE* fptr = fopen("Updates.txt","w");
+    for(int i=0;i<K;i++)
+        genUpdates(fptr,N,E,Graph,K);
+    
+    fclose(fptr);
 
     printGraphCSR(N,E,Graph,"graph.txt");
 
@@ -114,9 +119,8 @@ int main(){
     return 0;
 }
 
-void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
-    FILE* fptr = fopen("Updates.txt","w");
-    int remove = E/4;
+void genUpdates(FILE* fptr,int N, int& E, unordered_map<unsigned int, Node*>& Graph,int K){
+    int remove = E/(2*K);
     int count = 0;
     string strEdges = "";
     for(int i=0;i<remove/2;i++){
@@ -141,6 +145,7 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
 
 
     int delcount = 0;
+    /*
     for(int i=0;i<remove/2;i++){
         int a = rand()%N;
         unordered_map<unsigned int, Node*>::iterator itr;
@@ -157,14 +162,13 @@ void genUpdates(int N, int& E, unordered_map<unsigned int, Node*>& Graph){
                 
             }
         }
-    }
+    }*/
 
 
 
     E = E-count;
     fprintf(fptr,"%d\n",count+delcount);
     fprintf(fptr,"%s",strEdges.c_str());
-    fclose(fptr);
 
 }
 

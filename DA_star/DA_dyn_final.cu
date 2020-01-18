@@ -55,7 +55,9 @@ void insertDiff(unordered_map< unsigned int, Node*>& Graph,int a,int b,unsigned 
 void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
     int* diffOff,int* diffEdges,unsigned int* diffWeight );
 
-void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
+void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges);
+
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
     int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
     int* mOffset,int* mEdges,unsigned int* mWeight);
 
@@ -64,18 +66,14 @@ void check_cycle(int N,int* parent);
 
 void computeTime(float& time,cudaEvent_t start, cudaEvent_t stop);
 
-void check_remove_cycle(int* nodes,int* size,int* rev_offset,int* rev_edges,unsigned int* rev_weight,
-                        int* parent,int* parent_old,int* Cx,int* Hx,int N,int E,float& time,
-                        int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE);
-
 /**** device Code *******/
 
-// __device__ volatile int Cx[MAX_NODE];
+__device__ volatile int Cx[MAX_NODE];
 __device__ volatile int PQ[MAX_NODE];
 
 
 //K in parallel
-__global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,int* Cx,int* openList,int N,int K){
+__global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,int* openList,int N,int K){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -133,10 +131,10 @@ __global__ void extractMin(int* PQ_size, int* expandNodes,int* expandNodes_size,
 
 
 //for K in parallel
-__global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,volatile int* Cx,
+__global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* parent,
     int* expandNodes,int* expandNodes_size, int* lock ,int* flagfound,int* openList,
     int N,int E, int K,int dest,int* nVFlag,int* PQ_size,
-    int flagDiff,int* diff_off,int* diff_edge,unsigned int* diff_weight,int dE ){
+    int flagDiff,int* diff_off,int* diff_edge,int* diff_weight,int dE ){
        
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -257,7 +255,7 @@ __global__ void A_star_expand(int* off,int* edge,unsigned int* W,int* Hx,int* pa
 
 
 //K in parallel -- O(N)
-__global__ void keepHeapPQ(int* PQ_size,int* Cx,int N,int K){
+__global__ void keepHeapPQ(int* PQ_size,int N,int K){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < K && PQ_size[id] > 0){
         int front  = id*( (N+K-1)/K );
@@ -319,7 +317,7 @@ __global__ void setNV(int* nextFlag,int* nextV,int* nvSize,int N){
 
 
 //for K in parallel
-__global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int* Cx,int K,int N,int* openList){
+__global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int K,int N,int* openList){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id < K){
 
@@ -359,7 +357,7 @@ __global__ void insertPQ(int* PQS,int* nextV,int* nVsize,int* Cx,int K,int N,int
 
 
 //for K in parallel
-__global__ void checkMIN(int* PQ_size,int* flagEnd,int* Cx,int dest,int N,int K){
+__global__ void checkMIN(int* PQ_size,int* flagEnd,int dest,int N,int K){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
     if(id < K && PQ_size[id] > 0 ){
@@ -373,13 +371,11 @@ __global__ void checkMIN(int* PQ_size,int* flagEnd,int* Cx,int dest,int N,int K)
 }
 
 
-__global__ void propogateDel(int* delEdgesV,int delEdge, volatile int* Cx,
-                int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
-                int* Hx,volatile int* parent,int* parent_old,int* addFlag,
-                int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE){
+__global__ void propogateDel(int* delEdgesV,int delEdge,int* rev_offset,int* rev_edges,unsigned int* rev_weight,int N,int E,
+                int* Hx,int* parent,int* parent_old,int* lock,int* addFlag){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
-
+    
     if(id<delEdge){
         int node = delEdgesV[id];
         //check for the parent and add to nextflag and update the cost
@@ -396,15 +392,12 @@ __global__ void propogateDel(int* delEdgesV,int delEdge, volatile int* Cx,
         Cx[node]=INT_MAX;
         addFlag[node]=1;
 
-        int cost = INT_MAX;
-        int opt_parent = -1;
-
         //if any parent can change the cost 
         while(start< end){
             int p = rev_edges[start];
             
             //del edges
-            if(p<0 || p==node){
+            if(p<0){
                 start++;
                 continue;
             }
@@ -414,77 +407,30 @@ __global__ void propogateDel(int* delEdgesV,int delEdge, volatile int* Cx,
             
             //check parent doesn't contain node
             int ancestor = parent_old[p];
-    
-            while(ancestor>0){
-                if(ancestor==node){
-                    flag_cycle = true;
-                    break;
-                }
-                ancestor = parent_old[ancestor];
-                
-            }
-            
-            
-            //no need to lock only single parent so only one node in array so one node per thread
-            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
-                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
-                opt_parent = p;
-            }
-
-            start++;
-        }
-
-        start = rev_diff_offset[node];
-        end = dE;
-        if(node!=N-1)
-            end = rev_diff_offset[node+1];
-        
-        while(start< end){
-            int p = rev_diff_edges[start];
-            
-            //del edges
-            if(p<0 || p==node){
-                start++;
-                continue;
-            }
-            
-            int weight = rev_diff_weight[start];
-            int flag_cycle = false;
-            
-            //check parent doesn't contain node
-            int ancestor = parent_old[p];
-            
             while(ancestor!=-1){
                 if(ancestor==node){
                     flag_cycle = true;
                     break;
                 }
                 ancestor = parent_old[ancestor];
-                
             }
 
             //no need to lock only single parent so only one node in array so one node per thread
-            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
-                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
-                opt_parent = p;
+            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[node] > (Cx[p]-Hx[p])+weight+Hx[node] ){
+                Cx[node] = (Cx[p]-Hx[p] )+weight+Hx[node];
+                parent[node] = p;
             }
 
             start++;
         }
-
-        //write here
-        if(cost!=INT_MAX){
-            Cx[node]=cost;
-            parent[node]=opt_parent;
-        }
-
+    
     }
 
 }
 
 //add inserted edges to propogate
 __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W,int* Hx,int* addFlag,
-            volatile int* Cx,int* lock, int* parent, int* parent_old, int N, int dE){
+            int* lock, int* parent, int* parent_old, int N, int dE){
     
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     
@@ -525,7 +471,23 @@ __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W
                         ancestor = parent_old[ancestor];
                         
                     }
-                   
+                    /*
+                    if(flag_cycle){
+                        printf("Add %d->%d,%d:%d::%d\n",node,child,Cx[node],Cx[child],(Cx[node] - Hx[node])+ diff_W[start]+ Hx[child]);
+                        if(Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child]){
+                            int ancestor = node;
+                            while(ancestor > 0){
+                                if(ancestor==child){
+                                    printf("%d:%d\n",ancestor,Cx[ancestor]);    
+                                    break;
+                                }
+                                printf("%d:%d::%d ",ancestor,Cx[ancestor],parent[ancestor]);
+                                ancestor = parent_old[ancestor];
+                                
+                            }
+                        }
+                    }*/
+
                     if(!flag_cycle && Cx[node] != INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
                         
                         Cx[child] =  (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
@@ -552,106 +514,17 @@ __global__ void propogateAdd(int* diff_off, int* diff_edges,unsigned int* diff_W
 
 }
 
-
-__global__ void insert_propagate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
-            int N,int E,volatile int* Cx,int* lock, int* parent,int* addFlag,
-            int* diff_off,int* diff_edge,unsigned int* diff_W,int dE){
-
-    int id = blockIdx.x*blockDim.x+threadIdx.x;
-    if(id < *size){
-        int node = nodes[id];
-        int start = off[node];
-        int end = E;
-        if(node!=N-1)
-            end = off[node+1];
-        while(start < end ){
-            int child = edge[start];
-            
-            //deleted edges
-            if(child<0){
-                start++;
-                continue;
-            }
-            bool leaveLoop = false;
-                
-            while(!leaveLoop){
-
-                if(atomicExch(&lock[child],1)==0){
-                    
-                    if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                    }
-
-                    leaveLoop = true;    
-                    atomicExch(&lock[child],0);
-                }
-                __syncthreads();
-            }
-            
-            start++;
-        }
-
-        start = diff_off[node];
-        end = dE;
-        if(node!=N-1)
-            end = diff_off[node+1];
-        
-        while(start < end ){
-            int child = diff_edge[start];
-            
-            //deleted edges
-            if(child<0){
-                start++;
-                continue;
-            }
-            bool leaveLoop = false;
-
-            while(!leaveLoop){
-
-                if(atomicCAS(&lock[child],0,1)==0){
-                    //critical section
-
-                    if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                         
-                    }
-
-                    //end critical section
-                    leaveLoop = true;
-    
-                    atomicCAS(&lock[child],1,0);
-
-                }
-
-                __syncthreads();
-
-            }
-
-            start++;
-        }
-    
-    }
-
-}
-
-
-__global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
-                    int N,int E,volatile int* Cx,int* lock, int* parent,int* parent_old,int* addFlag,
+//propogate the change
+__global__ void propogate(int* nodes, int* size, int* off, int* edge,unsigned int* W,int* Hx,
+                    int N,int E, int* lock, int* parent,int* parent_old,int* addFlag,
                     int* diff_off,int* diff_edge,unsigned int* diff_W,int dE,
                     int* rev_offset,int* rev_edges,unsigned int* rev_weight,
                     int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight){
 
     int id = blockIdx.x*blockDim.x+threadIdx.x;
+    
+   // printf("Entering %d\n",id);
+    
     if(id < *size){
         int node = nodes[id];
         int start = off[node];
@@ -661,119 +534,145 @@ __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsi
         
         while(start < end ){
             int child = edge[start];
+            
+            //deleted edges
             if(child<0){
                 start++;
                 continue;
             }
 
-            bool leaveLoop = false;
-                
-            while(!leaveLoop){
+            bool flag_cycle_insert = false;
 
-                if(atomicExch(&lock[child],1)==0){
-                    if(Cx[node]!=INT_MAX && Cx[child]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                    }
-                    else 
-                    if( (Cx[node]==INT_MAX && parent[child]==node ) || ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
-                        //use back edges
-                        int rstart = rev_offset[child];
-                        int rend = E;
-                        if(child!=N-1)
-                            rend = rev_offset[child+1];
-                        
-                        //there is always one parent that is node.
-                        Cx[child] = INT_MAX;
-                        parent[child]=-1;
-
-                        while(rstart < rend){
-                            int p = rev_edges[rstart]; 
-                            if(p<0 || p == child){
-                                rstart++;
-                                continue;
-                            }
-
-                            int weight = rev_weight[rstart];
-                            bool flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                        
-                            int ancestor = parent_old[p];
-                            
-                            while(ancestor > 0){
-                                if(ancestor==child){
-                                    flag_cycle = true;
-                                    break;
-                                }
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
-                        
-                        rstart =  rev_diff_offset[child];
-                        rend = dE;
-                        if(child!=N-1)
-                            rend = rev_diff_offset[child+1];
-                    
-                        while(rstart < rend){
-                            int p = rev_diff_edges[rstart]; 
-                            
-                            if(p<0 || p==child){
-                                rstart++;
-                                continue;
-                            }
-
-                            int weight = rev_diff_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent_old[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child){
-                                    flag_cycle = true;
-                                    break;
-                                }
-                                    
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
-
-                        addFlag[child]=1;
-                    }
-                        
-
-                    leaveLoop = true;
-    
-                    atomicExch(&lock[child],0);
-
+            int optimal_parent = node;
+            while(optimal_parent > 0){
+                if(optimal_parent == child){
+                    flag_cycle_insert = true;
+                    break;
                 }
-
-                __syncthreads();
+                optimal_parent = parent_old[optimal_parent];
             }
 
+            if(!flag_cycle_insert){
+
+                //array L initilaized with 0
+                //get the lock for child to update C(x)
+                //loop till acquire the lock
+                bool leaveLoop = false;
+                
+                while(!leaveLoop){
+
+                    if(atomicExch(&lock[child],1)==0){
+                        //critical section
+    
+                        if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
+                            Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
+                            __threadfence();
+                            parent[child] = node;
+            
+                            addFlag[child]=1;
+    
+                        }
+                        else if( (Cx[node]==INT_MAX && parent[child]==node ) || ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ W[start]+ Hx[child]) )  ){
+                            
+                            //use back edges
+                            int rstart = rev_offset[child];
+                            int rend = E;
+                            if(child!=N-1)
+                                rend = rev_offset[child+1];
+                            
+                            //there is always one parent that is node.
+                            Cx[child] = INT_MAX;
+                            parent[child]=-1;
+    
+                            while(rstart < rend){
+                                int p = rev_edges[rstart]; 
+                                
+                                if(p<0){
+                                    rstart++;
+                                    continue;
+                                }
+    
+                                int weight = rev_weight[rstart];
+                                bool flag_cycle = false;
+                                
+                                //check parent doesn't contain child
+                            
+                                int ancestor = parent_old[p];
+                                
+                                while(ancestor > 0){
+                                    if(ancestor==child){
+                                        flag_cycle = true;
+                                        break;
+                                    }
+                                    ancestor = parent_old[ancestor];
+                                }
+                                
+                                if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                    Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                    parent[child] = p;
+                                }
+                                
+                                rstart++;
+                            }
+    
+                            
+                            //newly added backedges
+                            rstart =  rev_diff_offset[child];
+                            rend = dE;
+                            if(child!=N-1)
+                                rend = rev_diff_offset[child+1];
+                        
+                            while(rstart < rend){
+                                int p = rev_diff_edges[rstart]; 
+                                
+                                if(p<0){
+                                    rstart++;
+                                    continue;
+                                }
+    
+                                int weight = rev_diff_weight[rstart];
+                                int flag_cycle = false;
+                                
+                                //check parent doesn't contain child
+                                int ancestor = parent_old[p];
+                                while(ancestor!=-1){
+                                    if(ancestor==child){
+                                        flag_cycle = true;
+                                        break;
+                                    }
+                                        
+                                    ancestor = parent_old[ancestor];
+                                }
+                                
+                                if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                    Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                    parent[child] = p;
+                                }
+                                
+                                rstart++;
+                            }
+                            
+                            addFlag[child]=1;
+    
+                        }
+    
+                    
+                        //end critical section
+                        leaveLoop = true;
+    
+                        atomicExch(&lock[child],0);
+                    }
+    
+                    __syncthreads();
+                    
+                }
+            }
+          
+
             start++;
-
-        }
-
-
+        }    
+        
+        
         start = diff_off[node];
         end = dE;
         if(node!=N-1)
@@ -788,120 +687,136 @@ __global__ void delete_propagate(int* nodes, int* size, int* off, int* edge,unsi
                 continue;
             }
 
-            //array L initilaized with 0
-            //get the lock for child to update C(x)
-            //loop till acquire the lock
-            bool leaveLoop = false;
+            bool flag_cycle_insert = false;
 
-            while(!leaveLoop){
-
-                if(atomicCAS(&lock[child],0,1)==0){
-                    if(Cx[node]!=INT_MAX && Cx[child]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ W[start]+ Hx[child] ){
-                        Cx[child]  = (Cx[node] - Hx[node])+ W[start]+ Hx[child];
-                        __threadfence();
-                        parent[child] = node;
-        
-                        addFlag[child]=1;
-
-                    }
-                    else 
-                    if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
-                        //use back edges
-                        int rstart = rev_offset[child];
-                        int rend = E;
-                        if(child!=N-1)
-                            rend = rev_offset[child+1];
-                        
-                        //there is always one parent that is node.
-                        Cx[child] = INT_MAX;
-                        parent[child]=-1;
- 
-                        while(rstart < rend){
-                            int p = rev_edges[rstart]; 
-                            
-                            if(p<0 || p ==child){
-                                rstart++;
-                                continue;
-                            }
- 
-                            int weight = rev_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent_old[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child)
-                                    flag_cycle = true;
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
- 
-                        rstart =  rev_diff_offset[child];
-                        rend = dE;
-                        if(child!=N-1)
-                            rend = rev_diff_offset[child+1];
-                    
-                        while(rstart < rend){
-                            int p = rev_diff_edges[rstart]; 
-                            
-                            if(p<0 || p==child){
-                                rstart++;
-                                continue;
-                            }
- 
-                            int weight = rev_diff_weight[rstart];
-                            int flag_cycle = false;
-                            
-                            //check parent doesn't contain child
-                            int ancestor = parent_old[p];
-                            while(ancestor!=-1){
-                                if(ancestor==child){
-                                 flag_cycle = true;
-                                 break;
-                                }
-                                    
-                                ancestor = parent_old[ancestor];
-                            }
-                            
-                            if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
-                                Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
-                                parent[child] = p;
-                            }
-                            
-                            rstart++;
-                        }
- 
-                        addFlag[child]=1;
-                    }
-                    
-                    
-                    //end critical section
-                    leaveLoop = true;
-    
-                    atomicCAS(&lock[child],1,0);
+            int optimal_parent = node;
+            while(optimal_parent > 0){
+                if(optimal_parent == child){
+                    flag_cycle_insert = true;
+                    break;
                 }
-
-                __syncthreads();
-
+                optimal_parent = parent_old[optimal_parent];
             }
 
+            if(!flag_cycle_insert){
+
+                //array L initilaized with 0
+                //get the lock for child to update C(x)
+                //loop till acquire the lock
+                bool leaveLoop = false;
+
+                while(!leaveLoop){
+
+                    if(atomicCAS(&lock[child],0,1)==0){
+                        //critical section
+    
+                        if(Cx[node]!=INT_MAX && Cx[child] > (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child] ){
+                            Cx[child]  = (Cx[node] - Hx[node])+ diff_W[start]+ Hx[child];
+                            __threadfence();
+                            parent[child] = node;
+            
+                            addFlag[child]=1;
+    
+                        }else 
+                        if((Cx[node]==INT_MAX && parent[child]==node )|| ( parent[child]==node && (Cx[child] < Cx[node] - Hx[node]+ diff_W[start]+ Hx[child]) )  ){
+                           //use back edges
+                           int rstart = rev_offset[child];
+                           int rend = E;
+                           if(child!=N-1)
+                               rend = rev_offset[child+1];
+                           
+                           //there is always one parent that is node.
+                           Cx[child] = INT_MAX;
+                           parent[child]=-1;
+    
+                           while(rstart < rend){
+                               int p = rev_edges[rstart]; 
+                               
+                               if(p<0){
+                                   rstart++;
+                                   continue;
+                               }
+    
+                               int weight = rev_weight[rstart];
+                               int flag_cycle = false;
+                               
+                               //check parent doesn't contain child
+                               int ancestor = parent_old[p];
+                               while(ancestor!=-1){
+                                   if(ancestor==child)
+                                       flag_cycle = true;
+                                   ancestor = parent_old[ancestor];
+                               }
+                               
+                               
+                               if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                   Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                   parent[child] = p;
+                               }
+                               
+                               rstart++;
+                           }
+    
+                           rstart =  rev_diff_offset[child];
+                           rend = dE;
+                           if(child!=N-1)
+                               rend = rev_diff_offset[child+1];
+                       
+                           while(rstart < rend){
+                               int p = rev_diff_edges[rstart]; 
+                               
+                               if(p<0){
+                                   rstart++;
+                                   continue;
+                               }
+    
+                               int weight = rev_diff_weight[rstart];
+                               int flag_cycle = false;
+                               
+                               //check parent doesn't contain child
+                               int ancestor = parent_old[p];
+                               while(ancestor!=-1){
+                                   if(ancestor==child){
+                                    flag_cycle = true;
+                                    break;
+                                   }
+                                       
+                                   ancestor = parent_old[ancestor];
+                               }
+                               
+                               if(!flag_cycle && Cx[p]!=INT_MAX && Cx[child] > (Cx[p]-Hx[p])+weight+Hx[child] ){
+                                   Cx[child] = (Cx[p]-Hx[p] )+weight+Hx[child];
+                                   parent[child] = p;
+                               }
+                               
+                               rstart++;
+                           }
+    
+                           addFlag[child]=1;
+                        }
+    
+                        //end critical section
+                        leaveLoop = true;
+    
+                        atomicCAS(&lock[child],1,0);
+                    }
+    
+                    __syncthreads();
+                    
+                }
+            }
+           
+        
             start++;
-        }
+        } 
         
     }
-
+                        
 }
 
+
 //do in 1 thread
-__global__ void insertDest(int* PQ_size,int* Cx,int dest,int* openList){
+__global__ void insertDest(int* PQ_size, int dest,int* openList){
     int id = 0;
     int front = 0;
     if(openList[dest]==-1){
@@ -928,210 +843,13 @@ __global__ void insertDest(int* PQ_size,int* Cx,int dest,int* openList){
     
 }
 
-__global__ void getCx(int* Cx,int dest,int* val){
+__global__ void getCx(int dest,int* val){
     int id = blockIdx.x*blockDim.x+threadIdx.x;
     if(id==0){
         *val = Cx[dest];
     }
 }
 
-
-//single threaded merge operation on GPU
-__global__ void merge_graph(int* offset, int* edges,unsigned int* weight,int N,int E,
-            int* diff_offset,int* diff_edges,unsigned int* diff_weight,int dE,
-            int i,int E_new,int* mOffset,int* mEdges, unsigned int* mWeight,int* edgeOffset){
-
-
-    if(i==0)
-        mOffset[0]=0;
-    
-    int start = offset[i];
-    int end = E;
-    if(i!=N-1)
-        end = offset[i+1];
-    //int count = 0;
-    while(start<end){
-        int child = edges[start];
-        if(child!=-1){
-            mEdges[*edgeOffset] = child;
-            mWeight[*edgeOffset] = weight[start];
-            (*edgeOffset)++;
-        }
-        start++;
-    }
-
-    start = diff_offset[i];
-    end =  dE;
-    if(i!=N-1)
-        end = diff_offset[i+1];
-    while(start<end){
-        int child = diff_edges[start];
-        if(child!=-1){
-            mEdges[*edgeOffset] = child;
-            mWeight[*edgeOffset]= diff_weight[start];
-            (*edgeOffset)++;
-        }
-        start++;
-    }
-
-    if(i!=N-1)
-        mOffset[i+1]=*edgeOffset;
-
-}
-
-__global__ void remove_edge(int u,int v,int* offset,int* edges,int N,int E,
-                int* rev_offset,int* rev_edges,int* del_size){
-
-    int start = offset[u];
-    int end =  E;
-    bool flag_done = false;
-    bool flag_done_rev = false;
-    if(u!=N-1)
-        end = offset[u+1];
-    while(start<end){
-        if( v == edges[start]){
-            edges[start]=-1;
-            flag_done = true;
-            break;
-        }
-        start++;
-    }
-
-    start = rev_offset[v];
-    end = E;
-    if(v!=N-1)
-        end = rev_offset[v+1];
-    while(start < end){
-        if(u == rev_edges[start]){
-            rev_edges[start] = -1;
-            flag_done_rev = true;
-            break;
-        }
-        start++;
-    }
-
-    if(flag_done && flag_done_rev)
-        (*del_size)++;
-    
-    if( (flag_done && !flag_done_rev)|| (!flag_done && flag_done_rev) )
-        printf("[ERROR] edge present in front ot back graph\n");
-                
-}
-
-
-//1 thread
-__global__ void fix_parent_cycle(int* nodes,bool* visited,int* rev_offset,int* rev_edges,unsigned int* rev_weight,
-                int* parent,int* parent_old,int* Cx,int* Hx, int N,int E,int i,
-                int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE){
-
-    int node = nodes[i];
-    bool cycle = false;
-
-    int ancestor = parent[node];
-    while(ancestor > 0){
-        if(ancestor==node){
-            cycle  = true;
-            break;
-        }
-        if(visited[ancestor]){
-            break;
-        }
-        visited[ancestor]=true;
-        ancestor = parent[ancestor];
-    }
-
-    if(cycle){
-        // printf("cycle at %d->%d\n",node,parent[node]);
-        int p_cycle = parent[node];
-
-        int start = rev_offset[node];
-        int end = E;
-        if(node!=N-1)
-            end = rev_offset[node+1];
-        
-        //no parent
-        // write in parent read always from old_parent
-
-        int cost = INT_MAX;
-        int opt_parent = -1;
-
-        //if any parent can change the cost 
-        while(start< end){
-            int p = rev_edges[start];
-            
-            //del edges
-            if(p<0 || p == p_cycle || p==node){
-                start++;
-                continue;
-            }
-            
-            int weight = rev_weight[start];
-            int flag_cycle = false;
-            
-            //check parent doesn't contain node
-            int ancestor = parent_old[p];
-            while(ancestor>0){
-                if(ancestor==node){
-                    flag_cycle = true;
-                    break;
-                }
-                ancestor = parent_old[ancestor];
-            }
-
-            //no need to lock only single parent so only one node in array so one node per thread
-            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
-                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
-                opt_parent = p;
-            }
-
-            start++;
-        }
-
-        start = rev_diff_offset[node];
-        end = dE;
-        if(node!=N-1)
-            end = rev_diff_offset[node+1];
-        
-        while(start< end){
-            int p = rev_diff_edges[start];
-            
-            //del edges
-            if(p<0 || p== p_cycle || p== node){
-                start++;
-                continue;
-            }
-            
-            int weight = rev_diff_weight[start];
-            int flag_cycle = false;
-            
-            //check parent doesn't contain node
-            int ancestor = parent_old[p];
-            
-            while(ancestor!=-1){
-                if(ancestor==node){
-                    flag_cycle = true;
-                    break;
-                }
-                ancestor = parent_old[ancestor];
-                
-            }
-            
-            //no need to lock only single parent so only one node in array so one node per thread
-            if(!flag_cycle && Cx[p]!=INT_MAX && cost > (Cx[p]-Hx[p])+weight+Hx[node] ){
-                cost = (Cx[p]-Hx[p] )+weight+Hx[node];
-                opt_parent = p;
-            }
-
-            start++;
-        }
-
-    
-        Cx[node]=cost;
-        parent[node]=opt_parent;
-
-    }
-
-}
 
 
 /**** main function ****/
@@ -1157,7 +875,6 @@ int main(){
     int* H_hx = (int*)malloc(sizeof(int)*N);
     int* H_cx = (int*)malloc(sizeof(int)*N);
     int* H_parent = (int*)malloc(sizeof(int)*N);
-    int* H_parent_old = (int*)malloc(sizeof(int)*N);
 
 
     int* H_PQ = (int*)malloc(sizeof(int)*N);
@@ -1220,7 +937,6 @@ int main(){
     int* H_a0 = (int*)malloc(sizeof(int));
 
     int* H_nV_size = (int*)malloc(sizeof(int));
-    int* H_nV = (int*)malloc(sizeof(int)*N);
 
     //required coz if many tries to add same in diff threads high low lower
     int* H_nVFlag = (int*)malloc(sizeof(int)*N);
@@ -1255,9 +971,6 @@ int main(){
     
     //Priority queue size
     int* D_PQ_size;
-
-    //CX
-    int* D_Cx;
 
     //flag if in openList(contains which PQ)
     int* D_openList;
@@ -1306,8 +1019,6 @@ int main(){
     gpuErrchk ( cudaMalloc(&D_parent,sizeof(int)*N) );
     gpuErrchk ( cudaMalloc(&D_parent_old,sizeof(int)*N) );
    
-    gpuErrchk ( cudaMalloc(&D_Cx,sizeof(int)*N) );
-
     gpuErrchk ( cudaMalloc(&D_PQ_size,sizeof(int)*K) );
     
     gpuErrchk ( cudaMalloc(&D_openList,sizeof(int)*N) );
@@ -1345,8 +1056,8 @@ int main(){
 
     gpuErrchk ( cudaMemcpy(D_PQ_size,H_PQ_size,sizeof(int)*K,cudaMemcpyHostToDevice) );
 
-    gpuErrchk ( cudaMemcpy(D_Cx,H_cx,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
+    gpuErrchk ( cudaMemcpyToSymbol(Cx,H_cx, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
     gpuErrchk ( cudaMemcpyToSymbol(PQ,H_PQ, sizeof(int)*N, 0, cudaMemcpyHostToDevice) );
 
     gpuErrchk ( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
@@ -1388,24 +1099,24 @@ int main(){
     while(*H_flagEnd==0 && flag_PQ_not_empty==1){
         
         //extract min
-        extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_Cx,D_openList,N,K);
+        extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
         
         gpuErrchk(cudaPeekAtLastError() );
 
         cudaDeviceSynchronize();
 
         
-        A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,D_Cx,
+        A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
             D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
             N,E,K,endNode,D_nVFlag,D_PQ_size,
-            false,D_diff_offset,D_diff_edges,D_diff_weight,0);
+            false,D_diff_offset,D_diff_edges,D_diff_offset,0);
         
         gpuErrchk(cudaPeekAtLastError() );
         
         cudaDeviceSynchronize();
 
 
-        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_Cx,N,K);
+        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
         
@@ -1417,7 +1128,7 @@ int main(){
         cudaDeviceSynchronize();
         
 
-        insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,D_Cx,K,N,D_openList);
+        insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
         
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -1445,7 +1156,7 @@ int main(){
             //end 
             gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
 
-            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,D_Cx,endNode,N,K);
+            checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
@@ -1454,7 +1165,7 @@ int main(){
    
     }
 
-    getCx<<<1,1>>>(D_Cx,endNode,D_dest_cost);
+    getCx<<<1,1>>>(endNode,D_dest_cost);
     gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
 
     cudaEventRecord(stop);
@@ -1471,9 +1182,11 @@ int main(){
     if(*H_dest_cost!=INT_MAX){
         int p = endNode;
         while(H_parent[p]!=-1){
-            printf("%d ",p);  
+            printf("%d ",p);
+            Path.push_back(p);
             p = H_parent[p];
         }
+        Path.push_back(p);
         printf("%d\n",p);
     }
     else{
@@ -1481,6 +1194,12 @@ int main(){
     }
 
 
+    //reverse the path to get from source to end
+    reverse(Path.begin(),Path.end());
+
+    //
+   // check_cycle(N,H_parent);
+    
     ///////////////////////////////////////////////
     // A star complete //
 
@@ -1496,14 +1215,10 @@ int main(){
         unordered_map<unsigned int,Node*> Graph;
         unordered_map<unsigned int,Node*> rev_Graph;
 
-        vector<pair<int,int>>deleted_edges;
-
         bool flag_do_a_star = false;
         
         int insertEdge=0, delEdge=0;
         int delEdgesV_size = 0;                    //v whose cost can change due to deletion
-        int* D_delEdge;
-
         for(int i=0;i<line;i++){
             int flag;
             int u,v;
@@ -1515,13 +1230,21 @@ int main(){
                 insertEdge++;
             }
             else if(flag==0){
+                //check id del edges in optimal path.
+                check_del_path(u,v,Path,flag_do_a_star);
+                removeDelEdges(u,v,H_offset,H_edges,N,E,H_rev_offset,H_rev_edges);
+                //add to list only if its cost changes due to this deletion
+                if(H_parent[v]==u){
+                    H_delEdgesV[delEdgesV_size]=v;
+                    delEdgesV_size++;
+                }
                 
-                deleted_edges.push_back(pair<int,int>(u,v));               
+                delEdge++;
             }
             
         }
 
-        // insertEdge is insertion size
+        // inseetEdge is insertion size
         //for diff
         int* H_diff_edges = (int*)malloc(sizeof(int)*insertEdge);
         int* H_diff_offset = (int*)malloc(sizeof(int)*N);
@@ -1549,12 +1272,18 @@ int main(){
         memset(H_rev_diff_offset,0,sizeof(int)*N);
 
         if(1)
-            printf("[INFO](%d) insertion:%d\n",update_count,insertEdge);
+            printf("[INFO](%d) insertion:%d, deletion:%d, delaff:%d\n",update_count,insertEdge,delEdge,delEdgesV_size);
 
         createDiffGraph(N,Graph,H_diff_offset,H_diff_edges,H_diff_weight);
         createDiffGraph(N,rev_Graph,H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight);
         
         //TODO free the graphs
+
+        
+        //deleted edges
+        gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_edges,H_rev_edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_delEdgesV,H_delEdgesV,sizeof(int)*E,cudaMemcpyHostToDevice) );
 
         //diff graph
         gpuErrchk ( cudaMemcpy(D_diff_edges,H_diff_edges,sizeof(int)*insertEdge,cudaMemcpyHostToDevice) );
@@ -1569,18 +1298,45 @@ int main(){
         //reset D_nV flag
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
+        //add del
+        if(delEdgesV_size>0){
+            if(DEBUG)
+                printf("[INFO] Starting computing cost for deletions\n");
 
-        //do insertion first
+            //old parent to check cycle
+            gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
+
+            int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
+            
+            cudaEventRecord(start);
+            propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,N,E,
+                D_hx,D_parent,D_parent_old,D_lock,D_nVFlag);
+            
+            gpuErrchk(cudaPeekAtLastError() );
+            cudaDeviceSynchronize();
+
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            computeTime(run_time,start,stop);
+            
+        }
+
+        
+        
+        //
+        // gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
+        // check_cycle(N,H_parent);
+
         if(DEBUG)
             printf("[INFO] starting computing cost for inserions\n");
 
-    
+        
         gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
         
         cudaEventRecord(start);
         //N parallel
         propogateAdd<<<N_numBlocks,numThreads>>>(D_diff_offset, D_diff_edges,D_diff_weight,D_hx,D_nVFlag,
-            D_Cx,D_lock,D_parent,D_parent_old,N,insertEdge);
+            D_lock,D_parent,D_parent_old,N,insertEdge);
         
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -1588,8 +1344,12 @@ int main(){
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         computeTime(run_time,start,stop);
-
         
+        //
+        // gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
+        // check_cycle(N,H_parent);
+
+
         gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
 
         
@@ -1602,23 +1362,32 @@ int main(){
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         computeTime(run_time,start,stop);
+        
 
         //copy back
         gpuErrchk( cudaMemcpy(H_nV_size,D_nV_size, sizeof(int),cudaMemcpyDeviceToHost) );
 
         //reset nV flags
         gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
- 
+
         if(DEBUG)
-             printf("[INFO] starting propogation for insertions\n");
- 
-        while(*H_nV_size > 0){ 
+            printf("[INFO] starting propogation\n");
+
+        while(*H_nV_size > 0){                
 
             numBlocks = (*H_nV_size+numThreads-1)/numThreads;
+
+            //old parent to check cycle and remove locking on parent
+            gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
+
+            //printf("[INFO] update size:%d\n",*H_nV_size);
+
             cudaEventRecord(start);
-            insert_propagate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
-                N,E,D_Cx,D_lock,D_parent,D_nVFlag,
-                D_diff_offset,D_diff_edges,D_diff_weight,insertEdge);
+            propogate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
+                N,E,D_lock,D_parent,D_parent_old,D_nVFlag,
+                D_diff_offset,D_diff_edges,D_diff_weight,insertEdge,
+                D_rev_offset,D_rev_edges,D_rev_weight,
+                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight);
             
             gpuErrchk(cudaPeekAtLastError() );
             cudaDeviceSynchronize();
@@ -1626,6 +1395,7 @@ int main(){
             cudaEventSynchronize(stop);
             computeTime(run_time,start,stop);
             
+
             //reset size=0
             gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
 
@@ -1645,175 +1415,8 @@ int main(){
 
             //reset nV flags
             gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
-
         }
 
-        getCx<<<1,1>>>(D_Cx,endNode,D_dest_cost);
-        gpuErrchk( cudaMemcpy(H_dest_cost,D_dest_cost, sizeof(int),cudaMemcpyDeviceToHost) );
-        
-        //copy parent
-        gpuErrchk( cudaMemcpy(H_parent,D_parent, sizeof(int)*N,cudaMemcpyDeviceToHost) );
-
-        Path.clear();
-        if(*H_dest_cost!=INT_MAX){
-            int p = endNode;
-            while(H_parent[p]!=-1){
-                Path.push_back(p);
-                p = H_parent[p];
-            }
-            Path.push_back(p);
-        }
-        //reverse the path to get from source to end
-        reverse(Path.begin(),Path.end());
-
-        gpuErrchk ( cudaMalloc(&D_delEdge,sizeof(int)) );
-        gpuErrchk ( cudaMemcpy(D_delEdge,&delEdge,sizeof(int),cudaMemcpyHostToDevice) );
-
-        //start computation for deletion
-        for(int j=0;j<deleted_edges.size();j++){
-            int u,v;
-            u= deleted_edges[j].first;
-            v= deleted_edges[j].second;
-
-            //check id del edges in optimal path.
-            check_del_path(u,v,Path,flag_do_a_star);
-
-            int old = delEdge;
-            //if deleted adds to delEdge
-
-            remove_edge<<<1,1>>>(u,v,D_offset,D_edges,N,E,D_rev_offset,D_rev_edges,D_delEdge);
-
-            gpuErrchk ( cudaMemcpy(&delEdge,D_delEdge,sizeof(int),cudaMemcpyDeviceToHost) );
-
-            
-            //add to list only if its cost changes due to this deletion
-            if(H_parent[v]==u && delEdge > old ){
-                H_delEdgesV[delEdgesV_size]=v;
-                delEdgesV_size++;
-            }
-
-        }
-
-        //free memory
-        deleted_edges.clear();
-        deleted_edges.shrink_to_fit();      //may not but gives a hint
-
-
-        //deleted edges
-        gpuErrchk ( cudaMemcpy(D_delEdgesV,H_delEdgesV,sizeof(int)*E,cudaMemcpyHostToDevice) );
-
-
-        //remove check
-        // check_cycle(N,H_parent);
-
-        if(1)
-            printf("[INFO](%d) deletion:%d, eff del:%d\n",update_count,delEdge,delEdgesV_size);
-
-
-        //add del
-        if(delEdgesV_size>0){
-            if(DEBUG)
-                printf("[INFO] Starting computing cost for deletions\n");
-
-            //old parent to check cycle
-            gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
-
-            int numBlocks_del = ( delEdgesV_size + numThreads -1)/numThreads;
-            
-            cudaEventRecord(start);
-            propogateDel<<<numBlocks_del,numThreads>>>(D_delEdgesV,delEdgesV_size,D_Cx,
-                D_rev_offset,D_rev_edges,D_rev_weight,N,E,
-                D_hx,D_parent,D_parent_old,D_nVFlag,
-                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight,insertEdge);
-            
-            gpuErrchk(cudaPeekAtLastError() );
-            cudaDeviceSynchronize();
-
-            cudaEventRecord(stop);
-            cudaEventSynchronize(stop);
-            computeTime(run_time,start,stop);
-
-            //remove cycles
-            check_remove_cycle(D_delEdgesV,&delEdgesV_size,D_rev_offset,D_rev_edges,D_rev_weight,
-                D_parent,D_parent_old,D_Cx,D_hx,N,E,run_time,
-                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight,insertEdge);
-
-            // check_cycle(N,H_parent);
-
-            if(DEBUG)
-                printf("[INFO] starting propogation for deletions\n");
-
-            //make size =0
-            gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-        
-            //gen from flag D_nV
-            cudaEventRecord(start);
-            setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
-            
-            gpuErrchk(cudaPeekAtLastError() );
-            cudaDeviceSynchronize();
-            cudaEventRecord(stop);
-            cudaEventSynchronize(stop);
-            computeTime(run_time,start,stop);
-
-            //copy back
-            gpuErrchk( cudaMemcpy(H_nV_size,D_nV_size, sizeof(int),cudaMemcpyDeviceToHost) );
-
-            //reset nV flags
-            gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
-            
-
-            while(*H_nV_size > 0){ 
-
-                numBlocks = (*H_nV_size+numThreads-1)/numThreads;
-
-               //printf("delsize: %d\n",*H_nV_size);
-
-                //old parent to check cycle and remove locking on parent
-                gpuErrchk( cudaMemcpy(D_parent_old,D_parent,sizeof(int)*N,cudaMemcpyDeviceToDevice) );
-               
-                cudaEventRecord(start);
-                delete_propagate<<<numBlocks,numThreads>>>(D_nV,D_nV_size,D_offset,D_edges,D_weight,D_hx,
-                    N,E,D_Cx,D_lock,D_parent,D_parent_old,D_nVFlag,
-                    D_diff_offset,D_diff_edges,D_diff_weight,insertEdge,
-                    D_rev_offset,D_rev_edges,D_rev_weight,
-                    D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-                cudaDeviceSynchronize();
-                cudaEventRecord(stop);
-                cudaEventSynchronize(stop);
-                computeTime(run_time,start,stop);
-
-
-                //reset size=0
-                gpuErrchk( cudaMemcpy(D_nV_size,H_a0,sizeof(int),cudaMemcpyHostToDevice) );
-    
-                //gen from flag D_nV
-                cudaEventRecord(start);
-                setNV<<<N_numBlocks,numThreads>>>(D_nVFlag,D_nV,D_nV_size,N);
-                
-                gpuErrchk(cudaPeekAtLastError() );
-                cudaDeviceSynchronize();
-                cudaEventRecord(stop);
-                cudaEventSynchronize(stop);
-                computeTime(run_time,start,stop);
-                
-    
-                //copy back
-                gpuErrchk( cudaMemcpy(H_nV_size,D_nV_size, sizeof(int),cudaMemcpyDeviceToHost) );
-    
-                //reset nV flags
-                gpuErrchk( cudaMemcpy(D_nVFlag,H_nVFlag,sizeof(int)*N,cudaMemcpyHostToDevice) );
-
-                //remove cycles
-                check_remove_cycle(D_nV,H_nV_size,D_rev_offset,D_rev_edges,D_rev_weight,
-                    D_parent,D_parent_old,D_Cx,D_hx,N,E,run_time,
-                    D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight,insertEdge);
-    
-            }
-        
-        }
 
         if(DEBUG)
             printf("[INFO] updating priority queue\n");
@@ -1823,7 +1426,7 @@ int main(){
 
         //update PQ after propogate
         cudaEventRecord(start);
-        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_Cx,N,K);
+        keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
         
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -1836,7 +1439,7 @@ int main(){
         gpuErrchk( cudaMemcpy(D_flagEnd,H_flagEnd,sizeof(int),cudaMemcpyHostToDevice) );
     
         cudaEventRecord(start);
-        checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,D_Cx,endNode,N,K);
+        checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
         
         gpuErrchk( cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -1853,7 +1456,7 @@ int main(){
             printf("[INFO] doing a* after propogation\n");
 
             cudaEventRecord(start);
-            insertDest<<<1,1>>>(D_PQ_size,D_Cx,endNode,D_openList);
+            insertDest<<<1,1>>>(D_PQ_size,endNode,D_openList);
             gpuErrchk(cudaPeekAtLastError() );
             
             cudaDeviceSynchronize();
@@ -1880,7 +1483,7 @@ int main(){
                 
                 //extract min
                 cudaEventRecord(start);
-                extractMin<<<numBlocks,numThreads>>>(D_PQ_size,D_expandNodes,D_expandNodes_size,D_Cx,D_openList,N,K);
+                extractMin<<<numBlocks,numThreads>>>(D_PQ_size, D_expandNodes,D_expandNodes_size,D_openList,N,K);
                 
                 gpuErrchk(cudaPeekAtLastError() );
     
@@ -1891,10 +1494,10 @@ int main(){
 
     
                 cudaEventRecord(start);
-                A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,D_Cx,
+                A_star_expand<<<numBlocks,numThreads>>>(D_offset,D_edges,D_weight,D_hx,D_parent,
                     D_expandNodes,D_expandNodes_size, D_lock ,D_flagfound,D_openList,
                     N,E,K,endNode,D_nVFlag,D_PQ_size,
-                    true,D_diff_offset,D_diff_edges,D_diff_weight,insertEdge);
+                    true,D_diff_offset,D_diff_edges,D_diff_offset,insertEdge);
                 
                 gpuErrchk(cudaPeekAtLastError() );
                 
@@ -1905,7 +1508,7 @@ int main(){
 
 
                 cudaEventRecord(start);
-                keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_Cx,N,K);
+                keepHeapPQ<<<numBlocks,numThreads>>>(D_PQ_size,N,K);
                 gpuErrchk(cudaPeekAtLastError() );
 
                 cudaDeviceSynchronize();
@@ -1927,7 +1530,7 @@ int main(){
 
                 
                 cudaEventRecord(start);
-                insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,D_Cx,K,N,D_openList);
+                insertPQ<<<numBlocks,numThreads>>>(D_PQ_size,D_nV,D_nV_size,K,N,D_openList);
                 
                 gpuErrchk(cudaPeekAtLastError() );
                 cudaDeviceSynchronize();
@@ -1960,7 +1563,7 @@ int main(){
                     gpuErrchk( cudaMemcpy(D_flagEnd,H_flagfound,sizeof(int),cudaMemcpyHostToDevice) );
 
                     cudaEventRecord(start);
-                    checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,D_Cx,endNode,N,K);
+                    checkMIN<<< numBlocks,numThreads >>>(D_PQ_size,D_flagEnd,endNode,N,K);
                     
                     gpuErrchk( cudaPeekAtLastError() );
                     cudaDeviceSynchronize();
@@ -1970,14 +1573,14 @@ int main(){
     
 
                     gpuErrchk( cudaMemcpy(H_flagEnd,D_flagEnd, sizeof(int),cudaMemcpyDeviceToHost) );
-                
+                // printf("\ninside MIN\n");
                 }
         
             }
         }
     
         cudaEventRecord(start);
-        getCx<<<1,1>>>(D_Cx,endNode,D_dest_cost);
+        getCx<<<1,1>>>(endNode,D_dest_cost);
         
         cudaDeviceSynchronize();
         cudaEventRecord(stop);
@@ -2013,95 +1616,85 @@ int main(){
 
         
         //merge graph
-
+        int* H_offset_new,*H_edges_new;
+        unsigned int* H_weight_new;
+        
         int E_new = E + insertEdge - delEdge;
 
-        int* D_offset_new, *D_edges_new;
-        unsigned int* D_weight_new;
+        H_offset_new = (int*)malloc(sizeof(int)*N);
+        H_edges_new =  (int*)malloc(sizeof(int)*E_new);
+        H_weight_new = (unsigned int*)malloc(sizeof(unsigned int)*E_new);
+
+        mergeDiff(H_offset,H_edges,H_weight,N,E,
+            H_diff_offset,H_diff_edges,H_diff_weight,insertEdge,delEdge,
+            H_offset_new,H_edges_new,H_weight_new);
+
+        //free pointer
+        free(H_offset);
+        free(H_edges);
+        free(H_weight);
+        free(H_diff_offset);
+        free(H_diff_edges);
+        free(H_diff_weight);
+
+        H_offset = H_offset_new;
+        H_edges = H_edges_new;
+        H_weight = H_weight_new;
         
-
-        gpuErrchk ( cudaMalloc(&D_offset_new,sizeof(int)*N) );
-        gpuErrchk ( cudaMalloc(&D_edges_new,sizeof(int)*E_new) );
-        gpuErrchk ( cudaMalloc(&D_weight_new,sizeof(int)*E_new) );
-
-        int* H_merge_counter = (int*)malloc(sizeof(int));
-        *H_merge_counter = 0;
-        int* D_merge_counter;
-        gpuErrchk ( cudaMalloc(&D_merge_counter,sizeof(int)) );
-        gpuErrchk ( cudaMemcpy(D_merge_counter,H_merge_counter,sizeof(int),cudaMemcpyHostToDevice) );
-
-        for(int i=0;i<N;i++){
-            //launch with single thread
-            merge_graph<<<1,1>>>(D_offset,D_edges,D_weight,N,E,
-                D_diff_offset,D_diff_edges,D_diff_weight,insertEdge,
-                i,E_new,D_offset_new,D_edges_new,D_weight_new,D_merge_counter);
-
-            //check can be removed
-            gpuErrchk ( cudaMemcpy(H_merge_counter,D_merge_counter,sizeof(int),cudaMemcpyDeviceToHost) );
-
-            if(*H_merge_counter > E_new){
-                printf("ERROR: size %d::%d\n",E_new,*H_merge_counter);
-                break;
-            }
-        }
-
         //cudaFree and cpy
-        cudaFree(D_offset);
         cudaFree(D_edges);
         cudaFree(D_weight);
         cudaFree(D_diff_edges);
         cudaFree(D_diff_offset);
         cudaFree(D_diff_weight);
 
-        D_edges = D_edges_new;
-        D_offset = D_offset_new;
-        D_weight = D_weight_new;
+        gpuErrchk ( cudaMalloc(&D_edges,sizeof(int)*E_new) );
+        gpuErrchk ( cudaMalloc(&D_weight,sizeof(unsigned int)*E_new) );
+   
+        gpuErrchk ( cudaMemcpy(D_offset,H_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_edges,H_edges,sizeof(int)*E_new,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_weight,H_weight,sizeof(unsigned int)*E_new,cudaMemcpyHostToDevice) );
 
+        //merge rev graph
+        int* H_rev_offset_new,*H_rev_edges_new;
+        unsigned int* H_rev_weight_new;
 
-        //for rev graph
-        int* D_rev_offset_new, *D_rev_edges_new;
-        unsigned int* D_rev_weight_new;
+        H_rev_offset_new = (int*)malloc(sizeof(int)*N);
+        H_rev_edges_new =  (int*)malloc(sizeof(int)*E_new);
+        H_rev_weight_new = (unsigned int*)malloc(sizeof(unsigned int)*E_new);
         
-
-        gpuErrchk ( cudaMalloc(&D_rev_offset_new,sizeof(int)*N) );
-        gpuErrchk ( cudaMalloc(&D_rev_edges_new,sizeof(int)*E_new) );
-        gpuErrchk ( cudaMalloc(&D_rev_weight_new,sizeof(int)*E_new) );
-
-        *H_merge_counter = 0;
-        gpuErrchk ( cudaMemcpy(D_merge_counter,H_merge_counter,sizeof(int),cudaMemcpyHostToDevice) );
+        mergeDiff(H_rev_offset,H_rev_edges,H_rev_weight,N,E,
+            H_rev_diff_offset,H_rev_diff_edges,H_rev_diff_weight,insertEdge,delEdge,
+            H_rev_offset_new,H_rev_edges_new,H_rev_weight_new);
         
-        for(int i=0;i<N;i++){
-            //launch with single thread
-            merge_graph<<<1,1>>>(D_rev_offset,D_rev_edges,D_rev_weight,N,E,
-                D_rev_diff_offset,D_rev_diff_edges,D_rev_diff_weight,insertEdge,
-                i,E_new,D_rev_offset_new,D_rev_edges_new,D_rev_weight_new,D_merge_counter);
+        free(H_rev_offset);
+        free(H_rev_edges);
+        free(H_rev_weight);
+        free(H_rev_diff_offset);
+        free(H_rev_diff_edges);
+        free(H_rev_diff_weight);
+        
+        H_rev_offset = H_rev_offset_new;
+        H_rev_edges = H_rev_edges_new;
+        H_rev_weight = H_rev_weight_new;
 
-            //check can be removed
-            gpuErrchk ( cudaMemcpy(H_merge_counter,D_merge_counter,sizeof(int),cudaMemcpyDeviceToHost) );
-
-            if(*H_merge_counter > E_new){
-                printf("ERROR: size %d::%d\n",E_new,*H_merge_counter);
-                break;
-            }
-        }
-
-        //cudaFree and cpy
-        cudaFree(D_rev_offset);
+        //cuda free and cpy
         cudaFree(D_rev_edges);
         cudaFree(D_rev_weight);
         cudaFree(D_rev_diff_edges);
         cudaFree(D_rev_diff_offset);
         cudaFree(D_rev_diff_weight);
 
-        D_rev_edges = D_rev_edges_new;
-        D_rev_offset = D_rev_offset_new;
-        D_rev_weight = D_rev_weight_new;
+        gpuErrchk ( cudaMalloc(&D_rev_edges,sizeof(int)*E_new) );
+        gpuErrchk ( cudaMalloc(&D_rev_weight,sizeof(unsigned int)*E_new) );
 
-        
+        gpuErrchk ( cudaMemcpy(D_rev_offset,H_rev_offset,sizeof(int)*N,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_edges,H_rev_edges,sizeof(int)*E_new,cudaMemcpyHostToDevice) );
+        gpuErrchk ( cudaMemcpy(D_rev_weight,H_rev_weight,sizeof(unsigned int)*E_new,cudaMemcpyHostToDevice) );
+
         //change E
         E = E_new;
         
-        cudaFree(D_delEdge);
         cudaFree(D_delEdgesV);
         free(H_delEdgesV);
 
@@ -2199,6 +1792,34 @@ void createDiffGraph(int N,unordered_map<unsigned int,Node*>& Graph,
 }
 
 
+void removeDelEdges(int u,int v,int* offset,int* edges,int N,int E,int* rev_offset,int* rev_edges){
+    int start = offset[u];
+    int end =  E;
+    if(u!=N-1)
+        end = offset[u+1];
+    while(start<end){
+        if( v == edges[start]){
+            edges[start]=-1;
+            break;
+        }
+        start++;
+    }
+
+    start = rev_offset[v];
+    end = E;
+    if(v!=N-1)
+        end = rev_offset[v+1];
+    while(start < end){
+        if(u == rev_edges[start]){
+            rev_edges[start] = -1;
+            break;
+        }
+        start++;
+    }
+
+}
+
+
 void check_del_path(int u, int v,vector<int> Path, bool& flag){
     vector<int> :: iterator itr;
     itr = find(Path.begin(),Path.end(),u);
@@ -2233,12 +1854,11 @@ void check_cycle(int N,int* parent){
 }
 
 
-void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
+void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int& E,
             int* diff_offset, int* diff_edges,unsigned int* diff_weight,int insert_size,int del_size,
             int* mOffset,int* mEdges,unsigned int* mWeight){
 
   
-    int E_new = E + insert_size - del_size;
     mOffset[0] = 0;
     int edegOffset= 0;
     for(int i=0;i<N;i++){
@@ -2247,13 +1867,13 @@ void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
         int end = E;
         if(i!=N-1)
             end = offset[i+1];
-        //int count = 0;
+        int count = 0;
         while(start<end){
             int child = edges[start];
             if(child!=-1){
-                mEdges[edegOffset] = child;
-                mWeight[edegOffset] = weight[start];
-                edegOffset++;
+                mEdges[edegOffset+count] = child;
+                mWeight[edegOffset+count] = weight[start];
+                count++;
             }
             start++;
         }
@@ -2265,18 +1885,14 @@ void mergeDiff(int* offset,int* edges,unsigned int* weight,int N,int E,
         while(start<end){
             int child = diff_edges[start];
             if(child!=-1){
-                mEdges[edegOffset] = child;
-                mWeight[edegOffset]= diff_weight[start];
-                edegOffset++;
+                mEdges[edegOffset+count] = child;
+                mWeight[edegOffset+count]= diff_weight[start];
+                count++;
             }
             start++;
         }
 
-        if(edegOffset > E_new){
-            printf("ERROR: size %d::%d\n",E_new,edegOffset);
-            break;
-        }
-
+        edegOffset+=count;
         if(i!=N-1)
             mOffset[i+1]=edegOffset;
     }
@@ -2287,41 +1903,5 @@ void computeTime(float& time,cudaEvent_t start, cudaEvent_t stop){
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
     time+= milliseconds;
-    //printf("time:%f\n",milliseconds);
-}
-
-
-
-void check_remove_cycle(int* nodes,int* size,int* rev_offset,int* rev_edges,unsigned int* rev_weight,
-            int* parent,int* parent_old,int* Cx,int* Hx, int N,int E,float& run_time,
-            int* rev_diff_offset,int* rev_diff_edges,unsigned int* rev_diff_weight,int dE){
-
-    bool* D_visited;
-    gpuErrchk ( cudaMalloc(&D_visited,sizeof(bool)*N) );
-    gpuErrchk ( cudaMemset(D_visited,0,sizeof(bool)*N) );
-
-    cudaEvent_t start1,stop1;
-    cudaEventCreate(&start1);
-    cudaEventCreate(&stop1);
-
-    for(int i=0;i<*size;i++){
-        
-        cudaEventRecord(start1);
-
-        fix_parent_cycle<<<1,1>>>(nodes,D_visited,rev_offset,rev_edges,rev_weight,
-            parent, parent_old, Cx, Hx, N, E,i,
-            rev_diff_offset,rev_diff_edges,rev_diff_weight,dE);
-        
-        gpuErrchk(cudaPeekAtLastError() );
-        cudaDeviceSynchronize();
-        cudaEventRecord(stop1);
-        cudaEventSynchronize(stop1);
-        computeTime(run_time,start1,stop1);
-
-        gpuErrchk ( cudaMemset(D_visited,0,sizeof(bool)*N) );
-    }
-
-    cudaEventDestroy(start1);
-    cudaEventDestroy(stop1);
-    cudaFree(D_visited);
+    //printf("[INFO] run time: %f, %f\n",time,milliseconds);
 }

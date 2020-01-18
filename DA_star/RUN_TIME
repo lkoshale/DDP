@@ -1,0 +1,13 @@
+all time in milliseconds
+
+# file           #times     #dyn          #ga on cg         #start          #end            #updatesize        #delsize 30
+sx-math ins      465          1992.76       102.99          1               54283            edge-200,000
+sx-math  dyn     465          3038.475      88.569
+
+sx-superu ins    625          2988.46       222.187         8               298777            543339
+sx-sup     dyn   625          7757.77       147.288                                           744072
+
+
+wiki-data                                                                                     3833140
+
+
