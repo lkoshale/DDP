@@ -3,8 +3,6 @@
 #ifndef GRAPH_CUH
 #define GRAPH_CUH
 
-
-
 #include "utils.cuh"
 #include "graph.h"
 

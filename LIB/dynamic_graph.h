@@ -2,7 +2,6 @@
 #ifndef DYNAMIC_GRAPH_H
 #define DYNAMIC_GRAPH_H
 
-#include "graph.h"
 #include "diff_graph.h"
 
 template <class T = unsigned int>

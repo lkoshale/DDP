@@ -18,7 +18,8 @@ class GPU_Diff_Graph : GPU_Graph
 
 
 /*************************
-*       Implementation
+*       Diff Graph
+*
 **************************/
 
 template< class T >
