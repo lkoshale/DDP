@@ -4,7 +4,7 @@
 #include "graph.h"
 
 template <class T = unsigned int>
-class Diff_Graph : public Graph
+class Diff_Graph : public Graph<T>
 {
     private:
         int id;             //diff graph id

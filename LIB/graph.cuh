@@ -3,12 +3,14 @@
 #ifndef GRAPH_CUH
 #define GRAPH_CUH
 
+#include <cuda.h>
+
 #include "utils.cuh"
 #include "graph.h"
 
 
-template < class T = unsigned int>
-class GPU_Graph : public Graph
+template < class T >
+class GPU_Graph : public Graph<T>
 {
     private:
         int* d_offsets;
@@ -18,14 +20,15 @@ class GPU_Graph : public Graph
     public:
 
         GPU_Graph();
+        GPU_Graph(Graph<T>* graph_cpu);
          
         void __gpu_alloc();
 
         void __gpu_free();
 
-        int* get_offsets(){ return this->d_offsets; }
-        int* get_edges(){ return this->d_edges; }
-        T* get_weight(){ return this->d_weights; }
+        int* get_offsets();
+        int* get_edges();
+        T* get_weight();
 
 };
 
@@ -39,19 +42,31 @@ class GPU_Graph : public Graph
 template< class T >
 GPU_Graph<T>:: GPU_Graph()
 {
-    Base::Graph();
+    Graph<T>();
+}
+
+template< class T >
+GPU_Graph<T>:: GPU_Graph(Graph<T>* graph_cpu)
+{
+    this->N = graph_cpu->get_num_nodes();
+    this->E = graph_cpu->get_num_edges();
+    this->offsets = graph_cpu->get_offsets();
+    this->edges = graph_cpu->get_edges();
+    this->weights = graph_cpu->get_weights();
+
+    __gpu_alloc();
 }
 
 template< class T >
 void GPU_Graph<T>:: __gpu_alloc()
 {
-    gpuErrchk ( cudaMalloc(&d_offsets,sizeof(int)*N) );
-    gpuErrchk ( cudaMalloc(&d_edges,sizeof(int)*E) );
-    gpuErrchk ( cudaMalloc(&d_weights,sizeof(T)*E) );
+    gpuErrchk ( cudaMalloc(&d_offsets,sizeof(int)*(this->N) ) );
+    gpuErrchk ( cudaMalloc(&d_edges,sizeof(int)*(this->E) ) );
+    gpuErrchk ( cudaMalloc(&d_weights,sizeof(T)*(this->E) ) );
 
-    gpuErrchk ( cudaMemcpy(d_offsets,offsets,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(d_edges,edges,sizeof(int)*E,cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(d_weights,weights,sizeof(T)*E,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(d_offsets,this->offsets,sizeof(int)*(this->N),cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(d_edges,this->edges,sizeof(int)*(this->E),cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(d_weights,this->weights,sizeof(T)*(this->E),cudaMemcpyHostToDevice) );
 
 }
 

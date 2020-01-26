@@ -3,24 +3,29 @@
 #include <string>
 
 #include "graph.h"
-#include "utils.h"
+#include "diff_graph.h"
+
+#ifdef __NVCC__
+    #include <cuda.h>
+    #include "graph.cuh"
+#endif
+
 
 int main(){
     Graph<unsigned int > graph;
     std::string filename = "graph.txt";
-    // graph.read_graph(filename);
-
-    Builder<unsigned int> b;
-    b.build_graph(build_fn);
-    std::cout<<b.getN()<<" "<<b.getE()<<"\n";
+    graph.read_graph(filename);
     
-    graph.build_graph(b);
-
-
+   
     int* edge = graph.get_edges();
     int* off = graph.get_offsets();
-    unsigned int* w = graph.get_weight();
+    unsigned int* w = graph.get_weights();
 
+    #ifdef __NVCC__
+        GPU_Graph<unsigned int> g(&graph);
+        printf("allocated\n");
+    #endif
+ 
     
     for(int i=0;i<graph.get_num_edges();i++){
         std::cout<<edge[i]<<" ";

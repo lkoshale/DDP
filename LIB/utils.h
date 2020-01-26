@@ -6,6 +6,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+
+
+
+
+
+/*
 void build_fn( std::unordered_map<unsigned int, Node<unsigned int>* > *graph,unsigned int *N,unsigned int* E){
     int n =0;
     int e = 0;
@@ -66,6 +72,8 @@ void build_fn( std::unordered_map<unsigned int, Node<unsigned int>* > *graph,uns
 
     return;
 }
+
+*/
 
 
 

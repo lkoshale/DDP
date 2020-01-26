@@ -21,7 +21,6 @@ class GPU_Diff_Graph : GPU_Graph
 *       Diff Graph
 *
 **************************/
-
 template< class T >
 GPU_Diff_Graph<T> :: GPU_Diff_Graph(int id){
     this->id = id;

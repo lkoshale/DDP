@@ -9,12 +9,11 @@
 #include <iomanip>
 #include <string>
 
-#include "graph_builder.h"
 
-template <class DataType , class FuncType = Builder<DataType> > 
+template <class DataType = unsigned int> 
 class Graph 
 {
-    private:
+    public:
         unsigned int N;         //nodes from 0 to N-1
         unsigned int E;
         int* offsets;
@@ -22,20 +21,19 @@ class Graph
         DataType* weights;
 
         std::unordered_map<long,int> vertex_map;     //if vertex doesn't follow 0-1 naming
-
-    public: 
+ 
         Graph();
 
         void __alloc__(int n, int e);
 
-        void build_graph( FuncType function );
+        //void build_graph( FuncType function );
 
         int get_num_nodes();
         int get_num_edges();
 
         int* get_offsets();
         int* get_edges();
-        DataType* get_weight();
+        DataType* get_weights();
 
         void read_graph(std::string filename);
 
@@ -52,15 +50,15 @@ class Graph
 * (or move to another file .tpp nand include it here)
 */
 
-template <class DataType, class FuncType >
-Graph<DataType, FuncType>::Graph()
+template <class DataType >
+Graph<DataType >::Graph()
 {
     N = 0;
     E = 0;
 }
 
-template <class DataType, class FuncType >
-void Graph<DataType, FuncType> :: __alloc__(int n, int e){
+template <class DataType >
+void Graph<DataType > :: __alloc__(int n, int e){
     N = n;
     E = e;
     this->offsets = (int*)malloc(sizeof(int)*N);
@@ -69,30 +67,30 @@ void Graph<DataType, FuncType> :: __alloc__(int n, int e){
 }
 
 
-template <class DataType, class FuncType >
-void Graph<DataType, FuncType> :: build_graph(FuncType builder )
-{
-    builder(this->offsets,this->edges,this->weights);
-}
+// template <class DataType >
+// void Graph<DataType > :: build_graph(FuncType builder )
+// {
+//     builder(this->offsets,this->edges,this->weights);
+// }
 
-template <class DataType, class FuncType >
-int Graph<DataType, FuncType> :: get_num_nodes(){ return N; }
+template <class DataType >
+int Graph<DataType > :: get_num_nodes(){ return N; }
 
-template <class DataType, class FuncType >
-int Graph<DataType, FuncType> :: get_num_edges(){ return E; }
+template <class DataType >
+int Graph<DataType > :: get_num_edges(){ return E; }
 
-template <class DataType, class FuncType >
-int* Graph<DataType, FuncType> :: get_offsets(){ return this->offsets; }
+template <class DataType >
+int* Graph<DataType > :: get_offsets(){ return this->offsets; }
 
-template <class DataType, class FuncType >
-int*  Graph<DataType, FuncType> :: get_edges(){ return this->edges; }
+template <class DataType >
+int*  Graph<DataType > :: get_edges(){ return this->edges; }
 
-template <class DataType, class FuncType >
-DataType*  Graph<DataType, FuncType> :: get_weight(){ return this->weights; }
+template <class DataType >
+DataType*  Graph<DataType > :: get_weights(){ return this->weights; }
 
 
-template <class DataType, class FuncType >
-void Graph<DataType, FuncType> :: read_graph(std::string filename){
+template <class DataType >
+void Graph<DataType > :: read_graph(std::string filename){
     std:: ifstream infile;
     infile.open(filename);
     if (!infile){
@@ -120,8 +118,8 @@ void Graph<DataType, FuncType> :: read_graph(std::string filename){
 }
 
 
-template <class DataType, class FuncType >
-void  Graph<DataType, FuncType> :: free()
+template <class DataType >
+void  Graph<DataType > :: free()
 {
     free(this->offsets);
     free(this->edges);
