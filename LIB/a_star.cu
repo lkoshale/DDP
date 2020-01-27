@@ -86,7 +86,7 @@ void GPU_A_Star< T, U> :: __gpu_alloc()
     gpuErrchk ( cudaMemcpy(d_PQ_size,PQ_size,sizeof(unsigned int)*num_pq,cudaMemcpyHostToDevice) );
 
     gpuErrchk ( cudaMemcpy(d_parent,parent,sizeof(int)*N,cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(d_open_list,open_list,sizeof(int)*num_pq,cudaMemcpyHostToDevice) );
+    gpuErrchk ( cudaMemcpy(d_open_list,open_list,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
 }
 
@@ -238,7 +238,7 @@ std::vector<int>  GPU_A_Star< T, U>:: get_path()
         cudaDeviceSynchronize();
         
 
-        insertPQ < U > <<<numBlocks,numThreads>>>( d_PQ_size, d_next_vertices, d_next_vertices_size, d_Cx, K, N, d_open_list );
+        insertPQ < U > <<<numBlocks,numThreads>>>( d_PQ, d_PQ_size, d_next_vertices, d_next_vertices_size, d_Cx, K, N, d_open_list );
         
         gpuErrchk(cudaPeekAtLastError() );
         cudaDeviceSynchronize();
@@ -284,8 +284,6 @@ std::vector<int>  GPU_A_Star< T, U>:: get_path()
 
 
     std::vector<int> Path;
-    // printf("[OUT] Cost: %d\n",*dest_cost);
-    // printf("[OUT] Path(in reverse): ");
     if(dest_cost != INT_MAX){
         int p = this->end_node;
         while(parent[p]!=-1){
@@ -294,6 +292,8 @@ std::vector<int>  GPU_A_Star< T, U>:: get_path()
         }
         Path.push_back(p); 
     }
+
+    std::reverse(Path.begin(),Path.end());
 
     return Path;
 

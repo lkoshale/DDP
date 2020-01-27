@@ -32,19 +32,23 @@ GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph()
 {
     this->graph = new GPU_Graph<T>();
     this->diff = new GPU_Diff_Graph<T>(0);
+    is_diff = false;
 }
 
 
 template < class T >
 GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph(GPU_Graph<T> * graph, GPU_Diff_Graph<T> * diff)
 {
-
+    this->graph = graph;
+    this->diff = diff;
+    is_diff = false;
 }
 
 template < class T >
 GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph(GPU_Graph<T> * graph)
 {
-
+    this->graph = graph;
+    is_diff = false;
 }
 
 template < class T >

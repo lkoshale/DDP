@@ -25,11 +25,6 @@ int main(){
     int* edge = dgraph.get_graph().get_edges();
     int* off = dgraph.get_graph().get_offsets();
     unsigned int* w = dgraph.get_graph().get_weights();
-
-    #ifdef __NVCC__
-        GPU_Graph<unsigned int> g(&graph);
-        printf("allocated\n");
-    #endif
  
     
     for(int i=0;i<graph.get_num_edges();i++){
@@ -65,6 +60,24 @@ int main(){
     }
     printf("\n");
     
+    path.clear();
+
+    #ifdef __NVCC__
+        GPU_Graph<unsigned int> g(&graph);
+        printf("allocated\n");
+        GPU_Dynamic_Graph<unsigned int> dg(&g);
+        GPU_A_Star < unsigned int, int > g_algo(&dg,start,end,1);
+        g_algo.set_huiristics(hx);
+        
+        path = g_algo.get_path();
+        
+        for(int i=0;i<path.size();i++){
+             printf("%d ",path[i]);
+        }
+        printf("\n");
+    #endif
+
+
 
     return 0;
 }
