@@ -10,7 +10,7 @@
 #include <string>
 
 
-template <class DataType = unsigned int> 
+template <class DataType > 
 class Graph 
 {
     public:

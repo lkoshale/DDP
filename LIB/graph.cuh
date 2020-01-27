@@ -42,7 +42,8 @@ class GPU_Graph : public Graph<T>
 template< class T >
 GPU_Graph<T>:: GPU_Graph()
 {
-    Graph<T>();
+    this->N = 0;
+    this->E = 0;
 }
 
 template< class T >

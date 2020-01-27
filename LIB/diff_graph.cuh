@@ -4,10 +4,10 @@
 #ifndef DIFF_GRAPH_CUH
 #define DIFF_GRAPH_CUH
 
-#include "graph.h"
+#include "graph.cuh"
 
 template < class T = unsigned int>
-class GPU_Diff_Graph : GPU_Graph
+class GPU_Diff_Graph : GPU_Graph<T>
 {
     private:
         int id;
@@ -24,7 +24,8 @@ class GPU_Diff_Graph : GPU_Graph
 template< class T >
 GPU_Diff_Graph<T> :: GPU_Diff_Graph(int id){
     this->id = id;
-    GPU_Graph();
+    this->N = 0;
+    this->E = 0;
 }
 
 

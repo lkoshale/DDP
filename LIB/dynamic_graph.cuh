@@ -11,13 +11,17 @@ class GPU_Dynamic_Graph
     private:
         GPU_Graph<T> *graph;
         GPU_Diff_Graph<T> *diff;
+        bool is_diff = false;
 
     public:
         GPU_Dynamic_Graph();
 
         GPU_Dynamic_Graph(GPU_Graph<T> * graph, GPU_Diff_Graph<T> * diff);
 
-        ~GPU_Diff_Graph();
+        GPU_Dynamic_Graph(GPU_Graph<T> * graph);
+
+        GPU_Graph<T> get_graph();
+        GPU_Diff_Graph<T> get_diff_graph();
 
 };
 
@@ -26,9 +30,28 @@ class GPU_Dynamic_Graph
 template < class T >
 GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph()
 {
-    this->graph = new GPU_Graph();
-    this->diff = new GPU_Diff_Graph(0);
+    this->graph = new GPU_Graph<T>();
+    this->diff = new GPU_Diff_Graph<T>(0);
 }
+
+
+template < class T >
+GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph(GPU_Graph<T> * graph, GPU_Diff_Graph<T> * diff)
+{
+
+}
+
+template < class T >
+GPU_Dynamic_Graph<T> :: GPU_Dynamic_Graph(GPU_Graph<T> * graph)
+{
+
+}
+
+template < class T >
+GPU_Graph<T> GPU_Dynamic_Graph<T> ::  get_graph() { return *(this->graph); }
+
+template < class T >
+GPU_Diff_Graph<T> GPU_Dynamic_Graph<T> :: get_diff_graph(){ return *(this->diff); }
 
 
 #endif
