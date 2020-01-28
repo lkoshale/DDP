@@ -3,8 +3,8 @@
 
 #include <vector>
 #include <unordered_map>
+#include <iostream>
 
-/*
 template < class T >
 class Node
 {
@@ -44,9 +44,10 @@ class Builder
             std:: vector<unsigned int> off;
             off.push_back(0);
             int k =0;
+            std::cout<<Graph.size()<<" \n";
             for(int i=0;i<N;i++){
                 typename std:: unordered_map<unsigned int,Node<T>* >:: iterator itr;
-                itr = Graph.find(i);
+                itr = Graph.find(i); 
                 if(itr!=Graph.end()){
                     Node<T> *n = itr->second;
                     for(int j=0;j<n->Edges.size();j++){
@@ -60,6 +61,7 @@ class Builder
                 }
                 else{
                     off.push_back(k);
+                    std::cout<<k<<" "<<i<<"\n";
                 }
             }
 
@@ -69,12 +71,12 @@ class Builder
             }
         }
 
-        unsigned int getN(){return N;}
-        unsigned int getE(){return E;}
+        unsigned int get_num_nodes(){return N;}
+        unsigned int get_num_edges(){return E;}
 
 };
 
-*/
+
 
 
 #endif

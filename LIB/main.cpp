@@ -2,15 +2,15 @@
 #include <cstdlib>
 #include <string>
 
-#include "graph.h"
-#include "diff_graph.h"
-#include "dynamic_graph.h"
-#include "a_star.h"
+#include "include/graph.h"
+#include "include/diff_graph.h"
+#include "include/dynamic_graph.h"
+#include "include/a_star.h"
 
 #ifdef __NVCC__
     #include <cuda.h>
-    #include "graph.cuh"
-    #include "a_star.cuh"
+    #include "include/graph.cuh"
+    #include "include/a_star.cuh"
 #endif
 
 

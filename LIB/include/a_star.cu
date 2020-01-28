@@ -28,7 +28,7 @@ template <class U>
 __global__ void getCx(U* Cx,int dest,U* val);
 
 
-#include "a_star_kernels.cu"
+#include "kernels/a_star_kernels.cu"
 
 #include "a_star.cuh"
 
@@ -69,7 +69,7 @@ GPU_A_Star< T, U> :: GPU_A_Star(GPU_Dynamic_Graph<T> *graph, unsigned int start_
 }
 
 template <class T, class U >
-void GPU_A_Star< T, U> :: __gpu_alloc()
+void GPU_A_Star< T, U> :: __alloc_gpu()
 {
     int N = this->graph->get_graph().get_num_nodes();
 
@@ -136,7 +136,7 @@ std::vector<int>  GPU_A_Star< T, U>:: get_path()
     open_list[this->start_node]=0;  
 
     //alloc
-    __gpu_alloc();
+    __alloc_gpu();
 
     //next nodes flag
     int* d_next_vertices_flag;
@@ -183,8 +183,11 @@ std::vector<int>  GPU_A_Star< T, U>:: get_path()
    
     gpuErrchk ( cudaMemcpy(d_next_vertices_flag,next_vertices_flag,sizeof(int)*N,cudaMemcpyHostToDevice) );
 
-    gpuErrchk ( cudaMemcpy(d_next_vertices_size,__a0,sizeof(int),cudaMemcpyHostToDevice) );
-    gpuErrchk ( cudaMemcpy(d_expand_nodes_size,__a0,sizeof(int),cudaMemcpyHostToDevice) );
+    // gpuErrchk ( cudaMemcpy(d_next_vertices_size,__a0,sizeof(int),cudaMemcpyHostToDevice) );
+    // gpuErrchk ( cudaMemcpy(d_expand_nodes_size,__a0,sizeof(int),cudaMemcpyHostToDevice) );
+
+    gpuErrchk ( cudaMemset(d_next_vertices_size,0,sizeof(int)) );
+    gpuErrchk ( cudaMemset(d_expand_nodes_size,0,sizeof(int)) );
     
     gpuErrchk ( cudaMemset(d_lock,0,sizeof(int)*N) );
 

@@ -37,10 +37,10 @@ class GPU_A_Star
         int* d_parent;
         int* d_open_list;
 
+        void __alloc_gpu();
+
     public:
         GPU_A_Star(GPU_Dynamic_Graph<T> *graph, unsigned int start,unsigned int end, unsigned int K );
-
-        void __gpu_alloc();
 
         void set_huiristics(U* hx);
 
